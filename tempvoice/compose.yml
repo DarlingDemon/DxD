@@ -1,0 +1,19 @@
+name: dxd-tempvoice
+services:
+  bot:
+    image: dxd-tempvoice:1.0.0
+    build: .
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      FLUXER_API_URL: https://darkdck.duckdns.org/api
+      TEMPVOICE_GUILD_ID: ${TEMPVOICE_GUILD_ID:?set the target guild ID}
+      TEMPVOICE_CREATOR_ID: ${TEMPVOICE_CREATOR_ID:?set the creator voice channel ID}
+    volumes:
+      - ./secrets/bot-token:/run/secrets/bot-token:ro
+      - ./data:/app/data
+    logging:
+      options: {max-size: "5m", max-file: "3"}

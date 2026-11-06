@@ -1,0 +1,9 @@
+{
+  "name": "dxd-tempvoice",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fluxerjs/core": "3.3.0"
+  }
+}
