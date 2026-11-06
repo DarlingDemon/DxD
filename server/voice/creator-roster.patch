@@ -1,0 +1,24 @@
+diff --git a/guild_voice_disconnect_channel.erl b/guild_voice_disconnect_channel.erl
+--- a/guild_voice_disconnect_channel.erl
++++ b/guild_voice_disconnect_channel.erl
+@@ -97,9 +97,17 @@ disconnect_connection_from_expected_channel(
+ ) ->
+     case maps:get(ConnId, VoiceStates, undefined) of
+         undefined ->
+-            State1 = guild_voice_disconnect_broadcast:clear_pending_voice_connection(
+-                ConnId, State
+-            ),
++            Pending = maps:get(pending_voice_connections, State, #{}),
++            %% A channel move can reuse the connection ID for the destination.
++            State1 =
++                case maps:get(ConnId, Pending, undefined) of
++                    #{user_id := UserId, channel_id := ExpectedChannelId} ->
++                        guild_voice_disconnect_broadcast:clear_pending_voice_connection(
++                            ConnId, State
++                        );
++                    _ ->
++                        State
++                end,
+             {reply, #{success => true, ignored => true, reason => <<"connection_not_found">>},
+                 State1};
+         VoiceState ->
