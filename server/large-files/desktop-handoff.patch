@@ -1,0 +1,11 @@
+diff --git a/AppEntrypoint.js b/AppEntrypoint.js
+--- a/AppEntrypoint.js
++++ b/AppEntrypoint.js
+@@ -38961,6 +38961,6 @@
+     UsernameAvailabilityResponse = z27.object({
+       available: z27.boolean().describe("Whether no other account holds this username")
+     });
+-    DESKTOP_HANDOFF_RETURN_URI_PATTERN = /^fluxer(?:-canary|-development)?:\/\/handoff$/u;
++    DESKTOP_HANDOFF_RETURN_URI_PATTERN = /^(?:fluxer(?:-canary|-development)?|dxd-native):\/\/handoff$/u;
+     DesktopHandoffReturnMethod = z27.enum(["deep_link", "code"]);
+     HandoffInitiateRequest = z27.object({
