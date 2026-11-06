@@ -1,6 +1,7 @@
 import {readFileSync, renameSync, writeFileSync} from 'node:fs';
 
 const ROOM_GRACE_MS = 15_000;
+const FIRST_JOIN_GRACE_MS = 60_000;
 const VOICE = 2;
 const isId = (value) => typeof value === 'string' && /^\d{16,22}$/u.test(value);
 const connectionKey = (state) => state.connection_id ?? state.user_id;
@@ -51,8 +52,10 @@ export class TemporaryRooms {
     if (state.guild_id !== this.guildId || !isId(state.user_id)) return;
     const key = connectionKey(state);
     const previous = this.connections.get(key)?.channel_id;
-    if (state.channel_id) this.connections.set(key, state);
-    else this.connections.delete(key);
+    if (state.channel_id) {
+      this.connections.set(key, state);
+      this.cancelCleanup(state.channel_id);
+    } else this.connections.delete(key);
 
     if (previous && previous !== state.channel_id) this.scheduleCleanup(previous);
     if (state.channel_id !== this.creatorId || previous === this.creatorId || isBot || state.member?.user?.bot) return;
@@ -77,7 +80,7 @@ export class TemporaryRooms {
       });
       room = {id: channel.id, owner: state.user_id};
       this.rooms.set(room.id, room);
-      this.scheduleCleanup(room.id);
+      this.scheduleCleanup(room.id, FIRST_JOIN_GRACE_MS);
       this.save();
     }
     if (!stillInCreator()) return;
@@ -86,7 +89,7 @@ export class TemporaryRooms {
     await this.rest.patch(`/guilds/${this.guildId}/members/${state.user_id}`, {body});
   }
 
-  scheduleCleanup(id) {
+  scheduleCleanup(id, delayMs = this.graceMs) {
     if (!this.rooms.has(id) || this.deletions.has(id)) return;
     const timer = setTimeout(() => {
       this.deletions.delete(id);
@@ -96,7 +99,7 @@ export class TemporaryRooms {
         return;
       }
       void this.removeRoom(id).catch(this.onError);
-    }, this.graceMs);
+    }, delayMs);
     timer.unref?.();
     this.deletions.set(id, timer);
   }
@@ -116,15 +119,22 @@ export class TemporaryRooms {
   }
 
   forgetRoom(id) {
+    this.cancelCleanup(id);
+    if (this.rooms.delete(id)) this.save();
+  }
+
+  cancelCleanup(id) {
     clearTimeout(this.deletions.get(id));
     this.deletions.delete(id);
-    if (this.rooms.delete(id)) this.save();
   }
 
   async command(userId, action, value) {
     if (!this.hasSnapshot || !this.isReady()) return 'Подожди, бот ещё загружает список голосовых подключений.';
     const state = [...this.connections.values()].find((state) => state.user_id === userId && this.rooms.has(state.channel_id));
-    if (!state) return 'Сначала войди во временную комнату.';
+    if (!state) {
+      const ownRoom = [...this.rooms.values()].find((room) => room.owner === userId);
+      return ownRoom ? `Твоя комната — <#${ownRoom.id}>. Войди в неё, чтобы настроить.` : 'Сначала войди во временную комнату.';
+    }
     const room = this.rooms.get(state.channel_id);
     if (action === 'claim') {
       if (this.occupants(room.id).some((state) => state.user_id === room.owner)) return 'Владелец сейчас в комнате.';
