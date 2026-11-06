@@ -1,0 +1,394 @@
+diff --git a/commands/player.mjs b/commands/player.mjs
+index bc10dcd..3216412 100644
+--- a/commands/player.mjs
++++ b/commands/player.mjs
+@@ -7,11 +7,11 @@
+  */
+ 
+ import { CommandBuilder } from "../src/commands/index.mjs";
+-import { Utils } from "../src/utils/Utils.mjs";
++import { Utils, cleanId } from "../src/utils/Utils.mjs";
+ import { getGlobalColor } from "../src/ui/index.mjs";
+-import { EMOJI_REMOVE_TIMEOUT } from "../src/utils/UI.mjs";
+ import { logger } from "../src/core/Logger.mjs";
+ import { CONTROLS, buildPlayerEmbed, openLyricsViewer, clearLyricsReactions } from "./player/index.mjs";
++import { panelText } from "./player/embed.mjs";
+ 
+ /** @type {CommandBuilder} @description Command definition for the player command. */
+ export const command = new CommandBuilder()
+@@ -28,18 +28,20 @@ export const command = new CommandBuilder()
+  * @returns {Promise<void>}
+  */
+ export async function run(msg) {
+-  const player = await this.getPlayer(msg, false, false, false);
++  const player = await this.getPlayer(msg, false, true, false);
+   if (!player) return;
+ 
+   const timeout = Math.max(60_000, this.config?.timers?.playerSessionTimeout ?? this.config?.playerAFKTimeout ?? 300000);
+   const controlsLayout = [
+-    [CONTROLS.prev, CONTROLS.play, CONTROLS.pause, CONTROLS.stop, CONTROLS.next],
+-    [CONTROLS.loop, CONTROLS.shuffle, CONTROLS.volDown, CONTROLS.volUp, CONTROLS.lyrics],
++    [CONTROLS.prev, CONTROLS.back, CONTROLS.play, CONTROLS.forward, CONTROLS.next],
++    [CONTROLS.lyrics, CONTROLS.shuffle, CONTROLS.stop, CONTROLS.loop, CONTROLS.volDown, CONTROLS.volUp],
+     [CONTROLS.filter, CONTROLS.close]
+   ];
+ 
+   const allControls = controlsLayout.flat();
+   const controlEmojis = allControls.map(c => c.emoji);
++  const normalizeEmoji = (emoji) => emoji.replaceAll("\uFE0F", "");
++  const observedEmojis = [...new Set(controlEmojis.flatMap(emoji => [emoji, normalizeEmoji(emoji)]))];
+ 
+   const message = await msg.reply({ embeds: [buildPlayerEmbed(this, msg, player, timeout)] });
+   if (!message?.message) return;
+@@ -55,8 +57,16 @@ export async function run(msg) {
+ 
+   let sessionTimeout;
+   let updateInterval;
+-  let emojiRemoveTimeout;
+-  let lastState = {};
++  let refreshTimer;
++  let editInFlight;
++  let needsRefresh = false;
++  let statusMessage;
++  let _sessionClosed = false;
++  const history = [];
++  const remember = (line) => {
++    history.unshift(line);
++    if (history.length > 5) history.pop();
++  };
+ 
+   /** @private @type {object} Shared lyrics-viewer session state (cleaned up by closeSession). */
+   const lyrics = { activeLyricsMsg: null, unobserve: null, emojiTimeout: null };
+@@ -78,21 +88,6 @@ export async function run(msg) {
+     }
+   };
+ 
+-  /**
+-   * @private
+-   * Reset the emoji removal timeout for the player panel controls.
+-   * @returns {void}
+-   */
+-  const resetEmojiTimer = () => {
+-    clearTimeout(emojiRemoveTimeout);
+-    emojiRemoveTimeout = setTimeout(async () => {
+-      await clearReactions();
+-      const disabledEmbed = buildPlayerEmbed(this, msg, player, timeout, { message: this.t(msg, "responses.player.controlsDisabled") });
+-      disabledEmbed.footer = { text: this.t(msg, "responses._common.controlsExpired") };
+-      await message.edit({ embeds: [disabledEmbed] }).catch(() => {});
+-    }, EMOJI_REMOVE_TIMEOUT);
+-  };
+-
+   let editFailures = 0;
+ 
+   /**
+@@ -101,21 +96,31 @@ export async function run(msg) {
+    * @param {object} [extra={}] - Additional state data to merge (e.g. status message).
+    * @returns {void}
+    */
+-  const refresh = (extra = {}) => {
+-    const embed = buildPlayerEmbed(this, msg, player, timeout, extra);
+-    message.edit({ embeds: [embed] })
++  const refresh = ({ message: status } = {}) => {
++    if (_sessionClosed) return;
++    if (status !== undefined) statusMessage = status;
++    needsRefresh = true;
++    if (refreshTimer || editInFlight) return;
++    refreshTimer = setTimeout(() => {
++      refreshTimer = null;
++      if (_sessionClosed) return;
++      needsRefresh = false;
++      const embed = buildPlayerEmbed(this, msg, player, timeout, { message: statusMessage, history });
++      editInFlight = message.edit({ embeds: [embed] })
+         .then(() => { editFailures = 0; })
+         .catch(() => {
+           if (++editFailures >= 3) {
+             clearInterval(updateInterval);
+             updateInterval = null;
+           }
++        })
++        .finally(() => {
++          editInFlight = null;
++          if (needsRefresh) refresh();
+         });
+-    lastState = extra;
++    }, 100);
+   };
+ 
+-  let _sessionClosed = false;
+-
+   /**
+    * @private
+    * @async
+@@ -129,7 +134,7 @@ export async function run(msg) {
+     _sessionClosed = true;
+ 
+     clearTimeout(sessionTimeout);
+-    clearTimeout(emojiRemoveTimeout);
++    clearTimeout(refreshTimer);
+     clearInterval(updateInterval);
+     unobserve?.();
+ 
+@@ -140,6 +145,7 @@ export async function run(msg) {
+     player.off("volume",    onVolume);
+     player.off("filter",    onFilter);
+     player.off("autoleave", onAutoLeave);
++    player.off("leave",     onAutoLeave);
+ 
+     if (lyrics.unobserve) {
+       lyrics.unobserve();
+@@ -149,10 +155,12 @@ export async function run(msg) {
+       await clearLyricsReactions(lyrics.activeLyricsMsg);
+     }
+ 
++    await editInFlight;
+     await clearReactions();
+ 
+     const closedEmbed = buildPlayerEmbed(this, msg, player, timeout, {
+-      message: this.t(msg, "responses.player.sessionClosed", { reason: reason !== "timeout" ? ` • ${reason}` : "" })
++      message: this.t(msg, "responses.player.sessionClosed", { reason: reason !== "timeout" ? ` • ${reason}` : "" }),
++      history,
+     });
+     closedEmbed.setColor(getGlobalColor());
+     closedEmbed.setFooter({ text: this.t(msg, "responses._common.sessionEnded") });
+@@ -176,21 +184,24 @@ export async function run(msg) {
+ 
+   updateInterval = setInterval(() => {
+     if (player._destroyed || player.leaving) {
+-      clearInterval(updateInterval);
+-      updateInterval = null;
++      void closeSession("disconnected");
+       return;
+     }
+     if (!player.paused && player.queue.getCurrent()) {
+-      refresh(lastState);
++      refresh();
+     }
+   }, this.config?.timers?.playerUpdateInterval ?? 5000);
+ 
+-  const onStartPlay  = ()       => refresh({ message: this.t(msg, "responses.player.startedPlaying") });
++  const onStartPlay  = (track)  => {
++    remember(`Playing **${panelText(track.title)}**`);
++    refresh({ message: this.t(msg, "responses.player.startedPlaying") });
++  };
+   const onPlayback   = (playing) => refresh({ message: playing ? this.t(msg, "responses.player.resumed") : this.t(msg, "responses.player.pausedState") });
+   const onStopPlay   = ()       => refresh({ message: this.t(msg, "responses.player.stopped") });
+   const onQueue      = (e)      => {
+-    if (e.type === "shuffle") refresh({ message: this.t(msg, "responses.player.shuffled") });
+-    if (e.type === "add") refresh({ message: this.t(msg, "responses.player.added", { title: Utils.truncate(e.data.data.title, 30) }) });
++    if (e.type === "add") remember(`Queued **${panelText(e.data.data.title)}**`);
++    if (e.type === "addMany") remember(`Queued ${e.data.tracks.length} tracks`);
++    refresh();
+   };
+   const onVolume     = (v)      => refresh({ message: this.t(msg, "responses.player.volumeChanged", { volume: Math.round(v * 100) }) });
+   const onFilter     = (f)      => {
+@@ -211,26 +222,58 @@ export async function run(msg) {
+   player.on("volume",     onVolume);
+   player.on("filter",     onFilter);
+   player.on("autoleave",  onAutoLeave);
++  player.on("leave",      onAutoLeave);
+ 
+-  const unobserve = message.onReaction(controlEmojis, async (e) => {
+-    const control = allControls.find(c => c.emoji === e.emoji_id);
+-    if (!control) return;
+-
+-    resetEmojiTimer();
+-    resetTimeout();
++  const unobserve = message.onReaction(observedEmojis, async (e) => {
++    const control = allControls.find(c => normalizeEmoji(c.emoji) === normalizeEmoji(e.emoji_id));
++    if (!control || _sessionClosed || !e.user_id) return;
+ 
+     let reply = "";
+-    let shouldUpdate = true;
+ 
+     try {
++      const { channelId } = await this.players.checkVoiceChannels({ guildId: player._guildId, author: { id: e.user_id } });
++      if (_sessionClosed || player.leaving || player._destroyed || !channelId || cleanId(channelId) !== cleanId(player._channelId)) return;
++      resetTimeout();
+       switch (control.action) {
+-        case "previous":
+-          reply = this.t(msg, "responses.player.previousNotAvailable");
++        case "previous": {
++          const previous = player._lastPlayedTrack;
++          const current = player.queue.getCurrent();
++          if (!previous || !current || previous === current) {
++            reply = this.t(msg, "responses.player.previousNotAvailable");
++            break;
++          }
++          const queuedIndex = player.queue.loop ? player.queue.data.indexOf(previous) : -1;
++          if (queuedIndex !== -1) player.queue.data.splice(queuedIndex, 1);
++          player.addManyToQueue(player.queue.loop ? [previous] : [previous, current], true);
++          reply = player.skip();
+           break;
++        }
+ 
+-        case "resume":
++        case "back":
++        case "forward": {
++          const current = player.queue.getCurrent();
++          const duration = player._getTrackDurationMs(current);
++          if (!current || current.isLive || current.isStream || current.type === "radio" || duration <= 0 || player.paused) {
++            reply = "Seek is available during playback of a timed track.";
++            break;
++          }
++          const step = control.action === "back" ? -20_000 : 20_000;
++          const position = Utils.clamp(Date.now() - player.startedPlaying + step, 0, Math.max(0, duration - 1000));
++          void player.seekToPosition(position).then((ok) => {
++            if (!ok) refresh({ message: "Could not seek this track." });
++          }).catch((error) => {
++            logger.warn("[Player] Seek failed:", error?.message);
++            refresh({ message: "Could not seek this track." });
++          });
++          reply = `Seeking to ${Utils.prettifyMS(position)}.`;
++          break;
++        }
++
++        case "toggle":
+           if (player.paused) {
+             reply = player.resume();
++          } else if (player.queue.getCurrent()) {
++            reply = player.pause();
+           } else if (!player.queue.getCurrent() && !player.queue.isEmpty()) {
+             player.playNext().catch(() => {});
+             reply = this.t(msg, "responses.player.startingPlayback");
+@@ -239,10 +282,6 @@ export async function run(msg) {
+           }
+           break;
+ 
+-        case "pause":
+-          reply = player.pause();
+-          break;
+-
+         case "stop": {
+           const hadCurrent = !!player.queue.getCurrent();
+           player._lastPlayedTrack = player.queue.getCurrent() ?? player._lastPlayedTrack;
+@@ -299,7 +338,6 @@ export async function run(msg) {
+ 
+         case "filter":
+           reply = this.t(msg, "responses.player.openingFilterPicker");
+-          shouldUpdate = true;
+           try {
+             const { run: runFilter } = await import("./filter.mjs");
+             await runFilter.call(this, msg);
+@@ -310,7 +348,6 @@ export async function run(msg) {
+ 
+         case "lyrics":
+           reply = await openLyricsViewer(this, msg, player, refresh, lyrics);
+-          shouldUpdate = true;
+           break;
+ 
+         case "close":
+@@ -321,9 +358,10 @@ export async function run(msg) {
+       reply = this.t(msg, "responses.player.errorGeneric", { error: err.message });
+     }
+ 
+-    if (shouldUpdate) refresh({ message: reply });
++    const actor = this.client?.users?.get?.(e.user_id)?.username;
++    remember(`${control.emoji} ${control.desc}${actor ? ` · ${panelText(actor, 40)}` : ""}`);
++    refresh({ message: reply });
+   });
+ 
+   resetTimeout();
+-  resetEmojiTimer();
+ }
+diff --git a/commands/player/consts.mjs b/commands/player/consts.mjs
+index e48093f..3f04419 100644
+--- a/commands/player/consts.mjs
++++ b/commands/player/consts.mjs
+@@ -15,8 +15,9 @@ export const STATES = {
+ /** @type {Object.<string, {emoji: string, action: string, desc: string}>} Available control button definitions. */
+ export const CONTROLS = {
+   prev: { emoji: "⏮️", action: "previous", desc: "Previous" },
+-  play: { emoji: "▶️", action: "resume", desc: "Play" },
+-  pause: { emoji: "⏸️", action: "pause", desc: "Pause" },
++  play: { emoji: "⏯️", action: "toggle", desc: "Pause / resume" },
++  back: { emoji: "⏪", action: "back", desc: "−20 s" },
++  forward: { emoji: "⏩", action: "forward", desc: "+20 s" },
+   stop: { emoji: "⏹️", action: "stop", desc: "Stop" },
+   next: { emoji: "⏭️", action: "skip", desc: "Skip" },
+   loop: { emoji: "🔁", action: "loop", desc: "Loop" },
+diff --git a/commands/player/embed.mjs b/commands/player/embed.mjs
+index 5920395..256297d 100644
+--- a/commands/player/embed.mjs
++++ b/commands/player/embed.mjs
+@@ -10,6 +10,10 @@ import { EmbedBuilder } from "@fluxerjs/core";
+ import { getGlobalColor } from "../../src/ui/index.mjs";
+ import { STATES, PROGRESS } from "./consts.mjs";
+ 
++export function panelText(value, limit = 64) {
++  return Utils.escapeMarkdown(Utils.truncate(String(value ?? "Unknown").replace(/\s+/gu, " "), limit));
++}
++
+ /**
+  * Build the player panel embed with current state, progress, volume, and loop info.
+  * @param {object} bot - The bot instance (used for locale translation).
+@@ -27,11 +31,9 @@ export function buildPlayerEmbed(bot, msg, player, timeout, state = {}) {
+   let progressBar = "";
+   let timeDisplay = "`0:00 / 0:00`";
+ 
+-  if (current?.duration && player.startedPlaying) {
+-    const elapsed = Date.now() - player.startedPlaying;
+-    const totalMs = typeof current.duration === "object"
+-        ? (current.duration.seconds ?? 0) * 1000
+-        : current.duration;
++  const totalMs = player._getTrackDurationMs(current);
++  if (current && totalMs > 0 && player.startedPlaying) {
++    const elapsed = Utils.clamp((player.paused ? player._pausedAt ?? Date.now() : Date.now()) - player.startedPlaying, 0, totalMs);
+ 
+     const bar = Utils.progressBar(elapsed, totalMs, 20, PROGRESS.filled, PROGRESS.empty, isPlaying ? PROGRESS.indicator : PROGRESS.filled);
+     progressBar = PROGRESS.start + bar + PROGRESS.end;
+@@ -41,10 +43,11 @@ export function buildPlayerEmbed(bot, msg, player, timeout, state = {}) {
+     timeDisplay = `\`${elapsedStr} / ${totalStr}\``;
+   } else {
+     progressBar = PROGRESS.start + PROGRESS.empty.repeat(20) + PROGRESS.end;
++    if (current) timeDisplay = "`LIVE`";
+   }
+ 
+-  const volPercent = Math.round((player.preferredVolume ?? 1) * 100);
+-  const volBars = Math.ceil(volPercent / 10);
++  const volPercent = Utils.clamp(Math.round((player.preferredVolume ?? 1) * 100), 0, 200);
++  const volBars = Math.min(10, Math.ceil(volPercent / 10));
+   const volumeBar = "█".repeat(volBars) + "░".repeat(10 - volBars);
+ 
+   const queueSize = player.queue.size();
+@@ -59,24 +62,35 @@ export function buildPlayerEmbed(bot, msg, player, timeout, state = {}) {
+     }
+   }
+ 
+-  const nowPlaying = current
+-      ? `[${Utils.truncate(current.title, 45)}](${current.spotifyUrl || current.url})`
+-      : bot.t(msg, "responses.filter.nothingPlayingInline");
++  const trackUrl = current?.spotifyUrl || current?.url;
++  const title = panelText(current?.title, 80);
++  const nowPlaying = !current ? bot.t(msg, "responses.filter.nothingPlayingInline")
++      : /^https?:\/\/[^\s<>]+$/iu.test(trackUrl ?? "") ? `[${title}](<${trackUrl}>)` : title;
++  const requester = current?.requester?.username ?? current?.requester?.displayName;
++  const artist = current?.author?.name ?? current?.artist;
++  const queued = player.queue.data.slice(0, 5).map((track, index) => `\`${index + 1}.\` ${panelText(track.title)}`);
++  const queuePreview = [current && `▶ **${title}**`, ...queued, queueSize > queued.length && `+${queueSize - queued.length} more`].filter(Boolean);
+ 
+   const description = [
+     `${statusEmoji} ${bot.t(msg, "responses.player.nowPlayingLabel")}`,
+     `${nowPlaying}`,
++    artist ? panelText(artist) : null,
++    requester ? `Requested by **${panelText(requester, 40)}**` : null,
+     ``,
+     `${progressBar}`,
+     `${timeDisplay}`,
+     ``,
+     bot.t(msg, "responses.player.volumeLabel", { volume: volPercent }) + " " + volumeBar,
+-    `${bot.t(msg, "responses.player.queueLabel", { count: queueSize })} | Loop: ${loopStatus} | Filter: ${filterStatus}`,
++    `Loop: ${loopStatus} | Filter: ${filterStatus} | Autoplay: ${player._autoplay ? "On" : "Off"}`,
++    ``,
++    `**Queue · ${queueSize} upcoming · ${player.getQueueRemainingTime()} remaining**`,
++    ...(queuePreview.length ? queuePreview : ["Queue is empty."]),
+     ``,
+-    state.message ? `💬 *${state.message}*` : `💡 *${bot.t(msg, "responses.player.reactHint")}*`,
++    ...(state.history?.length ? ["**Recent activity**", ...state.history.map((line) => `• ${line}`), ""] : []),
++    state.message ? `💬 ${state.message}` : "⏮️ Previous · ⏪/⏩ ±20 s · ⏯️ Pause/Resume · ⏭️ Next",
+     ``,
+     bot.t(msg, "responses.player.sessionExpires", { minutes: Math.ceil(timeout / 60000) })
+-  ].join("\n");
++  ].filter((line) => line !== null).join("\n");
+ 
+   const avatarUrl = typeof msg.author?.avatarURL === "function"
+       ? msg.author.avatarURL()
