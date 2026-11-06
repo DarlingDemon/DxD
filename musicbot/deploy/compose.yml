@@ -1,7 +1,7 @@
 name: remix-dxd
 services:
   bot:
-    image: remix-dxd:fa5bc68
+    image: remix-dxd:queue-advance-20261106
     build:
       context: ..
       dockerfile: docker/Dockerfile

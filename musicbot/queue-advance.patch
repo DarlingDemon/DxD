@@ -1,0 +1,138 @@
+diff --git a/src/music/player/PlaybackMixin.mjs b/src/music/player/PlaybackMixin.mjs
+index 4df6bff..c936b4e 100644
+--- a/src/music/player/PlaybackMixin.mjs
++++ b/src/music/player/PlaybackMixin.mjs
+@@ -117,6 +117,7 @@ const PlaybackMixin = {
+    * @param {object} [opts] - Advancement options forwarded to Queue.next.
+    */
+   async _doPlayNext(opts = {}) {
++    const generation = this._playNextGeneration;
+     this._bridgeStop();
+ 
+     const currentBeforeNext = this.queue.getCurrent();
+@@ -161,6 +162,7 @@ const PlaybackMixin = {
+     } catch (e) {
+       logger.warn("[Player] TrackOptions lookup error:", e.message);
+     }
++    if (!this._isCurrentPlayback(songData, generation)) return;
+ 
+     if (trackOptMatch) {
+       this._activeTrackOpt = trackOptMatch;
+@@ -201,6 +203,7 @@ const PlaybackMixin = {
+         try {
+           if (this._lavalink) {
+             const result = await this._lavalink.search(songData.title, { source: "ytmsearch" });
++            if (!this._isCurrentPlayback(songData, generation)) return;
+             const track = result?.tracks?.[0];
+             if (track?.info?.uri) {
+               songData.url = track.info.uri;
+@@ -213,6 +216,7 @@ const PlaybackMixin = {
+             throw new Error("No Lavalink for fallback search");
+           }
+         } catch (searchErr) {
++          if (!this._isCurrentPlayback(songData, generation)) return;
+           logger.error("[Player] Could not resolve track:", searchErr?.message);
+           this.emit("message", { embeds: [new EmbedBuilder().setColor(getGlobalColor()).setDescription(this._t("responses._common.couldNotGetStream", { title: songData.title }))] });
+           this.emit("stopplay");
+@@ -225,7 +229,7 @@ const PlaybackMixin = {
+         await this._playTrackViaBridge(songData, { seekSeconds: seekSec });
+       }
+ 
+-      if (trackOptMatch && trackOptMatch.endMs > 0) {
++      if (this._isCurrentPlayback(songData, generation) && trackOptMatch && trackOptMatch.endMs > 0) {
+         const elapsedMs = Date.now() - this.startedPlaying;
+         const remainingMs = trackOptMatch.endMs - elapsedMs;
+         if (remainingMs > 0) {
+@@ -234,6 +238,7 @@ const PlaybackMixin = {
+         }
+       }
+     } catch (err) {
++      if (!this._isCurrentPlayback(songData, generation)) return;
+       logger.error("[Player] Play error:", err.message);
+       if (!this._skipping && !this.leaving && !this._paused && songData.type !== "radio") {
+         this.emit("message", { embeds: [new EmbedBuilder().setColor(getGlobalColor()).setDescription(this._t("responses._common.errorStreaming", { title: songData.title }))] });
+@@ -254,6 +259,10 @@ const PlaybackMixin = {
+     }
+   },
+ 
++  _isCurrentPlayback(track, generation) {
++    return !this._destroyed && !this.leaving && generation === this._playNextGeneration && this.queue.getCurrent() === track;
++  },
++
+   /**
+    * @private @async Play a track through the FluxerAudioBridge. For
+    * radio/external tracks without an encoded payload, attempts Lavalink URL
+@@ -268,6 +277,7 @@ const PlaybackMixin = {
+    * @returns {Promise<void>}
+    */
+   async _playTrackViaBridge(songData, options = {}) {
++    const generation = this._playNextGeneration;
+     if (!this._voiceConn || !this._audioBridge) {
+       throw new Error("No voice connection or audio bridge available");
+     }
+@@ -312,6 +322,7 @@ const PlaybackMixin = {
+       }
+     }
+ 
++    if (!this._isCurrentPlayback(songData, generation) || this._paused) return;
+     this._audioBridge._conn = this._voiceConn;
+ 
+     const seekMs = Math.floor((options.seekSeconds ?? 0) * 1000);
+@@ -331,7 +342,7 @@ const PlaybackMixin = {
+       filterPayload: this.activeFilterPayload || null,
+     });
+ 
+-    if (result === "finished" && !this._skipping && !this.leaving && !this._paused) {
++    if (result === "finished" && !this._skipping && !this._paused && this._isCurrentPlayback(songData, generation)) {
+       this._handleTrackEnd();
+     } else if (result === "stopped") {
+     }
+@@ -353,12 +364,10 @@ const PlaybackMixin = {
+     this._playingNext = false;
+     this._lastPlayedTrack = this.queue.getCurrent() ?? this._lastPlayedTrack;
+     this.emit("trackSkip", this._lastPlayedTrack);
++    this._skipping = false;
+     if (!this.leaving) {
+       this.playNext()
+-        .catch(e => logger.error("[Player] TrackEnd playNext error:", e.message))
+-        .finally(() => { this._skipping = false; });
+-    } else {
+-      this._skipping = false;
++        .catch(e => logger.error("[Player] TrackEnd playNext error:", e.message));
+     }
+   },
+ 
+diff --git a/src/music/player/Player.mjs b/src/music/player/Player.mjs
+index 367f2c5..0c11d7e 100644
+--- a/src/music/player/Player.mjs
++++ b/src/music/player/Player.mjs
+@@ -805,12 +805,10 @@ class Player extends EventEmitter {
+     this.emit("trackSkip", this._lastPlayedTrack);
+ 
+     this._playingNext = false;
++    this._skipping = false;
+     if (!this.leaving) {
+       this.playNext({ ignoreSongLoop: true })
+-        .catch(e => logger.error("[Player] playNext error:", e.message))
+-        .finally(() => { this._skipping = false; });
+-    } else {
+-      this._skipping = false;
++        .catch(e => logger.error("[Player] playNext error:", e.message));
+     }
+ 
+     return ":track_next: Skipped";
+@@ -843,12 +841,10 @@ class Player extends EventEmitter {
+     this.emit("trackSkip", this._lastPlayedTrack);
+ 
+     this._playingNext = false;
++    this._skipping = false;
+     if (!this.leaving) {
+       this.playNext({ ignoreSongLoop: true })
+-        .catch(e => logger.error("[Player] playNext error:", e.message))
+-        .finally(() => { this._skipping = false; });
+-    } else {
+-      this._skipping = false;
++        .catch(e => logger.error("[Player] playNext error:", e.message));
+     }
+ 
+     return `:track_next: Skipped to position ${position}`;
