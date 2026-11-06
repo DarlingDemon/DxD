@@ -4,22 +4,29 @@ const fs = require('node:fs');
 const path = require('node:path');
 const asar = require('../web/node_modules/@electron/asar');
 
-const version = '2026.1106.11354';
+const upstreamVersion = '2026.1106.11354';
+const {version} = require('./package.json');
 const upstream = process.argv[2];
 assert.ok(upstream, 'Pass the resources directory of the matching official Windows build');
 const archive = path.join(upstream, 'app.asar');
 const upstreamPackage = JSON.parse(asar.extractFile(archive, 'package.json'));
-assert.equal(upstreamPackage.version, version);
+assert.equal(upstreamPackage.version, upstreamVersion);
 assert.equal(upstreamPackage.name, 'fluxer_desktop_canary');
 
 const runtime = path.join(__dirname, 'upstream-runtime');
 const payload = path.join(__dirname, 'payload');
 const desktop = path.join(__dirname, '../../upstream/native/fluxer_desktop');
 if (!fs.existsSync(path.join(runtime, 'package.json'))) asar.extractAll(archive, runtime);
-assert.equal(JSON.parse(fs.readFileSync(path.join(runtime, 'dist/renderer/version.json'))).version, version);
+assert.equal(JSON.parse(fs.readFileSync(path.join(runtime, 'dist/renderer/version.json'))).version, upstreamVersion);
 fs.cpSync(path.join(runtime, 'dist/renderer'), path.join(desktop, 'dist/renderer'), {recursive: true});
 fs.mkdirSync(payload, {recursive: true});
 fs.cpSync(path.join(runtime, 'node_modules'), path.join(payload, 'vendor'), {recursive: true});
+const dependencies = path.join(__dirname, 'node_modules');
+fs.cpSync(dependencies, path.join(payload, 'vendor'), {
+  recursive: true,
+  filter: (source) => source === dependencies || !path.basename(source).startsWith('.'),
+});
+fs.copyFileSync(path.join(__dirname, 'start.mjs'), path.join(payload, 'start.mjs'));
 for (const directory of ['icons', 'badges']) {
   fs.cpSync(path.join(upstream, directory), path.join(payload, directory), {recursive: true});
 }
@@ -30,7 +37,7 @@ fs.writeFileSync(path.join(payload, 'package.json'), JSON.stringify({
   description: 'DxD based on Fluxer Desktop',
   author: 'DxD',
   license: 'AGPL-3.0-or-later',
-  main: 'dist/main/index.js',
+  main: 'start.mjs',
   type: 'module',
 }, null, 2));
 

@@ -7,7 +7,7 @@ directories:
   output: release
 files:
   - from: .
-    filter: [package.json, LICENSE, 'dist/**', '!**/*.map']
+    filter: [package.json, LICENSE, start.mjs, 'dist/**', '!**/*.map']
   - from: vendor
     to: node_modules
     filter: ['**/*']
@@ -35,6 +35,10 @@ protocols:
 win:
   target: nsis
   icon: payload/icons/icon.ico
+publish:
+  provider: generic
+  url: https://github.com/DarlingDemon/DxD/releases/latest/download/
+  useMultipleRangeRequest: false
 nsis:
   artifactName: DxD-Native-Setup-${version}-Windows-${arch}.exe
   oneClick: false

@@ -1,5 +1,8 @@
 {
   "name": "dxd-native-windows-build",
-  "version": "1.0.0",
-  "private": true
+  "version": "2026.1106.11355",
+  "private": true,
+  "dependencies": {
+    "electron-updater": "6.8.11"
+  }
 }
