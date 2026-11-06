@@ -87,18 +87,29 @@ index 95f1b13..ef79640 100644
  };
  
 diff --git a/fluxer_desktop/src/main/Bootstrap.ts b/fluxer_desktop/src/main/Bootstrap.ts
-index d6048a1..3b434ab 100644
+index d6048a1..89338fe 100644
 --- a/fluxer_desktop/src/main/Bootstrap.ts
 +++ b/fluxer_desktop/src/main/Bootstrap.ts
-@@ -1,7 +1,6 @@
+@@ -1,8 +1,8 @@
  // SPDX-License-Identifier: AGPL-3.0-or-later
  
  import fs from 'node:fs';
 -import {createRequire} from 'node:module';
  import path from 'node:path';
++import {pathToFileURL} from 'node:url';
  import {BUILD_CHANNEL} from '@electron/common/BuildChannel';
  import {WINDOWS_APP_USER_MODEL_ID, WINDOWS_TOAST_ACTIVATOR_CLSID} from '@electron/common/DesktopIdentity';
-@@ -24,30 +23,12 @@ import type {
+ import {resolveModulePollPlan} from '@electron/common/ModulePollPlan';
+@@ -15,7 +15,7 @@ import {
+ import {checkDesktopUpdateNow} from '@electron/main/DesktopUpdateGate';
+ import {armDesktopUpdatePoll, wakeDesktopUpdatePoll} from '@electron/main/DesktopUpdatePoll';
+ import {DesktopUpdateRun, type DesktopUpdateTakeover} from '@electron/main/DesktopUpdateRun';
+-import {armOpenUrlForwarding, observeRendererLaunchConfirmed} from '@electron/main/ModuleBootHandoff';
++import {armOpenUrlForwarding, observeRendererLaunchConfirmed, setDxDStartupUpdate} from '@electron/main/ModuleBootHandoff';
+ import type {ModuleLaunchAttempt, ModuleStore as ModuleStoreInstance} from '@electron/main/ModuleStore';
+ import type {
+ 	ModuleUpdater as ModuleUpdaterInstance,
+@@ -24,30 +24,12 @@ import type {
  	ModuleUpdaterStatus,
  } from '@electron/main/ModuleUpdater';
  import type {SplashState, SplashStatus} from '@electron/main/SplashWindow';
@@ -130,6 +141,19 @@ index d6048a1..3b434ab 100644
  	electronApp.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID);
  	electronApp.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
  }
+@@ -846,6 +828,12 @@ switch (MODULE_SYSTEM_LAUNCH.kind) {
+ 	case ModuleSystemLaunchDecision.DISABLED_BY_BUILD:
+ 	case ModuleSystemLaunchDecision.DISABLED_BY_REQUEST:
+ 		if (HAS_OFFLINE_RENDERER) {
++			setDxDStartupUpdate(async (signal) => {
++				const updaterUrl = pathToFileURL(path.join(electronApp.getAppPath(), 'startup-update.mjs'));
++				const {checkStartupUpdate} = await import(updaterUrl.href);
++				const splash = await import('@electron/main/SplashWindow');
++				return checkStartupUpdate(splash, signal);
++			});
+ 			await import(MAIN_PROCESS_ENTRY_URL);
+ 		} else {
+ 			void refuseUnsupportedBuild('the module system is turned off and this build carries no offline renderer').catch(
 diff --git a/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts b/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
 index b088691..0702c5c 100644
 --- a/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
@@ -143,3 +167,65 @@ index b088691..0702c5c 100644
  }
  
  async function fetchRuntimePlan(
+diff --git a/fluxer_desktop/src/main/ModuleBootHandoff.ts b/fluxer_desktop/src/main/ModuleBootHandoff.ts
+index b7de1b1..eed46db 100644
+--- a/fluxer_desktop/src/main/ModuleBootHandoff.ts
++++ b/fluxer_desktop/src/main/ModuleBootHandoff.ts
+@@ -6,6 +6,12 @@ import {app, type BrowserWindow} from 'electron';
+ 
+ const logger = createChildLogger('ModuleBootHandoff');
+ 
++export let runDxDStartupUpdate: ((signal: AbortSignal) => Promise<boolean>) | undefined;
++
++export function setDxDStartupUpdate(check: NonNullable<typeof runDxDStartupUpdate>): void {
++	runDxDStartupUpdate = check;
++}
++
+ type MainWindowListener = (window: BrowserWindow | null) => void;
+ 
+ type MainWindowReadyListener = () => void;
+diff --git a/fluxer_desktop/src/main/index.ts b/fluxer_desktop/src/main/index.ts
+index cb21835..222472a 100644
+--- a/fluxer_desktop/src/main/index.ts
++++ b/fluxer_desktop/src/main/index.ts
+@@ -19,7 +19,7 @@ import {
+ 	loadAppStoreBinding,
+ } from '@electron/main/AppStoreNativeBoundary';
+ import {registerAutostartHandlers} from '@electron/main/Autostart';
+-import {isStartMinimizedLaunch} from '@electron/main/AutostartLaunch';
++import {AUTOSTART_LAUNCH_ARG, isStartMinimizedLaunch} from '@electron/main/AutostartLaunch';
+ import {
+ 	appendWindowsGpuDriverWorkaroundSwitches,
+ 	purgeChromiumRuntimeCachesIfNeeded,
+@@ -86,6 +86,7 @@ import {
+ 	armOpenUrlForwarding,
+ 	armSecondInstanceForwarding,
+ 	hasQuitStarted,
++	runDxDStartupUpdate,
+ 	setMainWindowFactory,
+ 	setOpenUrlSink,
+ 	setSecondInstanceSink,
+@@ -408,6 +409,23 @@ if (launchConfigurationError) {
+ 				} catch (error) {
+ 					log.error('[Init] Failed to install the system trust verifier:', error);
+ 				}
++				if (
++					runDxDStartupUpdate &&
++					process.platform === 'win32' &&
++					app.isPackaged &&
++					!userDataConfig.portable &&
++					!isStartMinimizedLaunch() &&
++					process.argv.slice(1).every((arg) => arg === AUTOSTART_LAUNCH_ARG)
++				) {
++					try {
++						if (await runDxDStartupUpdate(startupController.signal)) {
++							return;
++						}
++					} catch (error) {
++						log.warn('[DxD Update] Startup check failed:', error);
++					}
++					stopStartupIfQuitting();
++				}
+ 				try {
+ 					await runStartupPhaseAsync('desktop-debug-info', async () => {
+ 						logDesktopDebugInfo(await getDesktopDebugInfo(userDataConfig.base, {nativeProbes: false}));

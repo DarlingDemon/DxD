@@ -26,7 +26,7 @@ fs.cpSync(dependencies, path.join(payload, 'vendor'), {
   recursive: true,
   filter: (source) => source === dependencies || !path.basename(source).startsWith('.'),
 });
-fs.copyFileSync(path.join(__dirname, 'start.mjs'), path.join(payload, 'start.mjs'));
+fs.copyFileSync(path.join(__dirname, 'startup-update.mjs'), path.join(payload, 'startup-update.mjs'));
 for (const directory of ['icons', 'badges']) {
   fs.cpSync(path.join(upstream, directory), path.join(payload, directory), {recursive: true});
 }
@@ -37,7 +37,7 @@ fs.writeFileSync(path.join(payload, 'package.json'), JSON.stringify({
   description: 'DxD based on Fluxer Desktop',
   author: 'DxD',
   license: 'AGPL-3.0-or-later',
-  main: 'start.mjs',
+  main: 'dist/main/index.js',
   type: 'module',
 }, null, 2));
 

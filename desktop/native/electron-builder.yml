@@ -7,7 +7,7 @@ directories:
   output: release
 files:
   - from: .
-    filter: [package.json, LICENSE, start.mjs, 'dist/**', '!**/*.map']
+    filter: [package.json, LICENSE, startup-update.mjs, 'dist/**', '!**/*.map']
   - from: vendor
     to: node_modules
     filter: ['**/*']
