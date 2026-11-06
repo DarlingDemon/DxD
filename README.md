@@ -2,6 +2,8 @@
 
 Доработки для самостоятельного экземпляра Fluxer на darkdck.duckdns.org.
 
+Установщик DxD Native для Windows x64 доступен в [последнем релизе](https://github.com/DarlingDemon/DxD/releases/latest).
+
 | Каталог | Содержимое |
 | --- | --- |
 | [desktop/native](desktop/native) | Нативный Windows-клиент с сервером DxD по умолчанию и штатными модулями захвата Fluxer |
