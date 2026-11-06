@@ -1,0 +1,290 @@
+diff --git a/commands/lastfm/playback.mjs b/commands/lastfm/playback.mjs
+index 96165fc..b78bd05 100644
+--- a/commands/lastfm/playback.mjs
++++ b/commands/lastfm/playback.mjs
+@@ -155,6 +155,7 @@ export async function playLastFmCategory(ctx, msg, userId, category, options = {
+         continue;
+       }
+ 
++      if (added === 0) options.onQueueReady?.(p);
+       p.addManyToQueue(resolvedTracks, false);
+       added += resolvedTracks.length;
+ 
+diff --git a/commands/play.mjs b/commands/play.mjs
+index 4a2c4f7..167b2e7 100644
+--- a/commands/play.mjs
++++ b/commands/play.mjs
+@@ -12,6 +12,7 @@ import { PROVIDER_CHOICES, parseInlineProvider } from "../src/music/providers.mj
+ import { playLastFmCategory } from "./lastfm.mjs";
+ import { parseLastFmUrl, isLastFmUrl } from "../src/services/lastfm/LastFmManager.mjs";
+ import { ERROR_COLOR } from "../src/utils/UI.mjs";
++import { showPanelOnQueue } from "./player.mjs";
+ 
+ const LASTFM_PLAY_CATEGORIES = ["loved", "top", "recent", "albums"];
+ 
+@@ -209,6 +210,7 @@ export async function run(message, data) {
+   const flagProvider = data.get("provider")?.value;
+   const { provider: inlineProvider, query } = parseInlineProvider(rawQuery);
+   const provider = inlineProvider ?? flagProvider ?? "ytm";
++  const preparePanel = (player) => showPanelOnQueue(this, message, player);
+ 
+   if (isNativeAudioUrl(rawQuery)) {
+     const p = await this.getPlayer(message, true, true, true);
+@@ -220,6 +222,7 @@ export async function run(message, data) {
+     let statusMsg = null;
+     try { statusMsg = await message.reply({ embeds: [statusEmbed] }); } catch(e) { logger.warn("[Play] Error:", e?.message); }
+ 
++    preparePanel(p);
+     const messages = p.playExternal(rawQuery);
+     messages.on("message", d => {
+       const embed = new EmbedBuilder().setColor(getGlobalColor()).setDescription(d);
+@@ -239,6 +242,7 @@ export async function run(message, data) {
+     let statusMsg = null;
+     try { statusMsg = await message.reply({ embeds: [statusEmbed] }); } catch(e) { logger.warn("[Play] Error:", e?.message); }
+ 
++    preparePanel(p);
+     const messages = p.playExternal(rawQuery, null, null, false, "stream");
+     messages.on("message", d => {
+       const embed = new EmbedBuilder().setColor(getGlobalColor()).setDescription(d);
+@@ -270,6 +274,7 @@ export async function run(message, data) {
+       try { statusMsg = await message.reply({ embeds: [searchEmbed] }); } catch(e) { logger.warn("[Play] Error:", e?.message); }
+ 
+       const playQuery = `${parsed.track} ${parsed.artist}`.trim();
++      preparePanel(p);
+       const messages = p.play(playQuery, false, provider === "lastfm" || provider === "lf" ? "yt" : provider, lastfmTrackMeta);
+       messages.on("message", d => {
+         const embed = new EmbedBuilder().setColor(getGlobalColor()).setDescription(d);
+@@ -290,6 +295,7 @@ export async function run(message, data) {
+       try { statusMsg = await message.reply({ embeds: [searchEmbed] }); } catch(e) { logger.warn("[Play] Error:", e?.message); }
+ 
+       const playQuery = parsed.artist;
++      preparePanel(p);
+       const messages = p.play(playQuery, false, provider === "lastfm" || provider === "lf" ? "yt" : provider);
+       messages.on("message", d => {
+         const embed = new EmbedBuilder().setColor(getGlobalColor()).setDescription(d);
+@@ -330,7 +336,7 @@ export async function run(message, data) {
+ 
+     if (LASTFM_PLAY_CATEGORIES.includes(lowerQuery)) {
+       const userId = message.message?.author?.id ?? message.author?.id;
+-      return playLastFmCategory(this, message, userId, lowerQuery, { resolveProvider });
++      return playLastFmCategory(this, message, userId, lowerQuery, { resolveProvider, onQueueReady: preparePanel });
+     }
+ 
+     const playlistMatch = lowerQuery.match(/^playlist\s+(\d+)$/);
+@@ -339,6 +345,7 @@ export async function run(message, data) {
+       return playLastFmCategory(this, message, userId, "playlist", {
+         playlistId: playlistMatch[1],
+         resolveProvider,
++        onQueueReady: preparePanel,
+       });
+     }
+ 
+@@ -389,6 +396,7 @@ export async function run(message, data) {
+         if (!p) return;
+ 
+         const playQuery = `${searchResult.name} ${searchResult.artist}`.trim();
++        preparePanel(p);
+         const messages = p.play(playQuery, false, playProvider, lastfmTrackMeta);
+         messages.on("message", d => {
+           const embed = new EmbedBuilder().setColor(getGlobalColor()).setDescription(d);
+@@ -428,6 +436,7 @@ export async function run(message, data) {
+     ? `${lastfmTrackMeta.name} ${lastfmTrackMeta.artist}`.trim()
+     : query;
+ 
++  preparePanel(p);
+   const messages = p.play(playQuery, false, resolvedProvider);
+   messages.on("message", d => {
+     const embed = new EmbedBuilder().setColor(getGlobalColor()).setDescription(d);
+diff --git a/commands/player.mjs b/commands/player.mjs
+index 3216412..70b04ed 100644
+--- a/commands/player.mjs
++++ b/commands/player.mjs
+@@ -13,6 +13,49 @@ import { logger } from "../src/core/Logger.mjs";
+ import { CONTROLS, buildPlayerEmbed, openLyricsViewer, clearLyricsReactions } from "./player/index.mjs";
+ import { panelText } from "./player/embed.mjs";
+ 
++const pendingPanels = new WeakMap();
++
++// Queue additions are the success signal shared by the different !play sources.
++export function showPanelOnQueue(bot, msg, player) {
++  if (player._playerPanel) return;
++  pendingPanels.get(player)?.();
++  const cancel = () => {
++    clearTimeout(timer);
++    player.off("queue", onQueue);
++    player.off("leave", cancel);
++    player.off("autoleave", cancel);
++    pendingPanels.delete(player);
++  };
++  const onQueue = ({type}) => {
++    if (type !== "add" && type !== "addMany") return;
++    cancel();
++    void ensurePanel(bot, msg, player);
++  };
++  const timer = setTimeout(cancel, 120_000);
++  timer.unref?.();
++  pendingPanels.set(player, cancel);
++  player.on("queue", onQueue);
++  player.once("leave", cancel);
++  player.once("autoleave", cancel);
++}
++
++function ensurePanel(bot, msg, player) {
++  if (player._playerPanel) {
++    player._playerPanel.refresh?.();
++    return player._playerPanel.opening;
++  }
++  if (player.leaving || player._destroyed) return;
++  pendingPanels.get(player)?.();
++  const session = {};
++  player._playerPanel = session;
++  session.opening = Promise.resolve().then(() => openPanel.call(bot, msg, player, session))
++    .catch((error) => logger.warn("[Player] Could not open panel:", error?.message))
++    .finally(() => {
++      if (!session.refresh && player._playerPanel === session) delete player._playerPanel;
++    });
++  return session.opening;
++}
++
+ /** @type {CommandBuilder} @description Command definition for the player command. */
+ export const command = new CommandBuilder()
+     .setName("player")
+@@ -29,8 +72,10 @@ export const command = new CommandBuilder()
+  */
+ export async function run(msg) {
+   const player = await this.getPlayer(msg, false, true, false);
+-  if (!player) return;
++  if (player) await ensurePanel(this, msg, player);
++}
+ 
++async function openPanel(msg, player, session) {
+   const timeout = Math.max(60_000, this.config?.timers?.playerSessionTimeout ?? this.config?.playerAFKTimeout ?? 300000);
+   const controlsLayout = [
+     [CONTROLS.prev, CONTROLS.back, CONTROLS.play, CONTROLS.forward, CONTROLS.next],
+@@ -46,15 +91,6 @@ export async function run(msg) {
+   const message = await msg.reply({ embeds: [buildPlayerEmbed(this, msg, player, timeout)] });
+   if (!message?.message) return;
+ 
+-  for (const row of controlsLayout) {
+-    for (const control of row) {
+-      try {
+-        await message.message.react(control.emoji);
+-        await Utils.sleep(50);
+-      } catch(e) { logger.warn("[Player] Error:", e?.message); }
+-    }
+-  }
+-
+   let sessionTimeout;
+   let updateInterval;
+   let refreshTimer;
+@@ -107,12 +143,12 @@ export async function run(msg) {
+       needsRefresh = false;
+       const embed = buildPlayerEmbed(this, msg, player, timeout, { message: statusMessage, history });
+       editInFlight = message.edit({ embeds: [embed] })
+-        .then(() => { editFailures = 0; })
++        .then((edited) => {
++          if (edited === null) void closeSession("missing");
++          else editFailures = 0;
++        })
+         .catch(() => {
+-          if (++editFailures >= 3) {
+-            clearInterval(updateInterval);
+-            updateInterval = null;
+-          }
++          if (++editFailures >= 3) void closeSession("edit failed");
+         })
+         .finally(() => {
+           editInFlight = null;
+@@ -132,6 +168,7 @@ export async function run(msg) {
+   const closeSession = async (reason = "timeout") => {
+     if (_sessionClosed) return;
+     _sessionClosed = true;
++    if (player._playerPanel === session) delete player._playerPanel;
+ 
+     clearTimeout(sessionTimeout);
+     clearTimeout(refreshTimer);
+@@ -156,6 +193,7 @@ export async function run(msg) {
+     }
+ 
+     await editInFlight;
++    if (reason === "missing") return;
+     await clearReactions();
+ 
+     const closedEmbed = buildPlayerEmbed(this, msg, player, timeout, {
+@@ -179,7 +217,9 @@ export async function run(msg) {
+    */
+   const resetTimeout = () => {
+     clearTimeout(sessionTimeout);
+-    sessionTimeout = setTimeout(() => closeSession("timeout"), timeout);
++    if (!player.queue.getCurrent() && player.queue.isEmpty()) {
++      sessionTimeout = setTimeout(() => closeSession("timeout"), timeout);
++    }
+   };
+ 
+   updateInterval = setInterval(() => {
+@@ -193,14 +233,19 @@ export async function run(msg) {
+   }, this.config?.timers?.playerUpdateInterval ?? 5000);
+ 
+   const onStartPlay  = (track)  => {
++    resetTimeout();
+     remember(`Playing **${panelText(track.title)}**`);
+     refresh({ message: this.t(msg, "responses.player.startedPlaying") });
+   };
+   const onPlayback   = (playing) => refresh({ message: playing ? this.t(msg, "responses.player.resumed") : this.t(msg, "responses.player.pausedState") });
+-  const onStopPlay   = ()       => refresh({ message: this.t(msg, "responses.player.stopped") });
++  const onStopPlay   = ()       => {
++    resetTimeout();
++    refresh({ message: this.t(msg, "responses.player.stopped") });
++  };
+   const onQueue      = (e)      => {
+     if (e.type === "add") remember(`Queued **${panelText(e.data.data.title)}**`);
+     if (e.type === "addMany") remember(`Queued ${e.data.tracks.length} tracks`);
++    if (e.type === "add" || e.type === "addMany") clearTimeout(sessionTimeout);
+     refresh();
+   };
+   const onVolume     = (v)      => refresh({ message: this.t(msg, "responses.player.volumeChanged", { volume: Math.round(v * 100) }) });
+@@ -363,5 +408,18 @@ export async function run(msg) {
+     refresh({ message: reply });
+   });
+ 
++  session.refresh = refresh;
++  if (player.leaving || player._destroyed) {
++    await closeSession("disconnected");
++    return;
++  }
+   resetTimeout();
++  refresh();
++  for (const control of allControls) {
++    if (_sessionClosed) break;
++    try {
++      await message.message.react(control.emoji);
++      await Utils.sleep(50);
++    } catch(e) { logger.warn("[Player] Error:", e?.message); }
++  }
+ }
+diff --git a/commands/player/embed.mjs b/commands/player/embed.mjs
+index 256297d..f307410 100644
+--- a/commands/player/embed.mjs
++++ b/commands/player/embed.mjs
+@@ -89,7 +89,7 @@ export function buildPlayerEmbed(bot, msg, player, timeout, state = {}) {
+     ...(state.history?.length ? ["**Recent activity**", ...state.history.map((line) => `• ${line}`), ""] : []),
+     state.message ? `💬 ${state.message}` : "⏮️ Previous · ⏪/⏩ ±20 s · ⏯️ Pause/Resume · ⏭️ Next",
+     ``,
+-    bot.t(msg, "responses.player.sessionExpires", { minutes: Math.ceil(timeout / 60000) })
++    `Panel closes after ${Math.ceil(timeout / 60000)} min idle.`
+   ].filter((line) => line !== null).join("\n");
+ 
+   const avatarUrl = typeof msg.author?.avatarURL === "function"
+diff --git a/src/music/player/DisplayMixin.mjs b/src/music/player/DisplayMixin.mjs
+index 04f4249..173c150 100644
+--- a/src/music/player/DisplayMixin.mjs
++++ b/src/music/player/DisplayMixin.mjs
+@@ -262,7 +262,7 @@ const DisplayMixin = {
+    * @param {object} s
+    */
+   announceSong(s) {
+-    if (!s) return;
++    if (!s || this._playerPanel) return;
+ 
+     if (s.type === "radio") {
+       this.emit("message", { embeds: [new EmbedBuilder().setColor(getGlobalColor()).setDescription(this._t("responses.radio.nowPlaying", {
