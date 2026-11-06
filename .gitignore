@@ -1,0 +1,14 @@
+node_modules/
+upstream/
+payload/
+upstream-runtime/
+release/
+dist/
+*.exe
+*.log
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+musicbot/deploy/config.json

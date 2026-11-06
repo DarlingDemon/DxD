@@ -1,0 +1,129 @@
+diff --git a/AppEntrypoint.js b/AppEntrypoint.js
+index ca91f80..9a73640 100644
+--- a/AppEntrypoint.js
++++ b/AppEntrypoint.js
+@@ -23643,7 +23643,9 @@ import {
+   PutObjectCommand,
+   S3Client as S3Client2,
+   S3ServiceException as S3ServiceException2,
+-  UploadPartCommand
++  UploadPartCommand,
++  UploadPartCopyCommand,
++  GetObjectTaggingCommand
+ } from "@aws-sdk/client-s3";
+ import { Upload } from "@aws-sdk/lib-storage";
+ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+@@ -23952,20 +23954,34 @@ var init_StorageService = __esm({
+         }
+       }
+       async computeObjectSha256(bucket, key) {
+-        const hash = createHash5("sha256");
+-        const out = await this.client.send(new GetObjectCommand2({ Bucket: bucket, Key: key }));
+-        const body = extractStreamFromGet(out);
+-        try {
+-          for await (const chunk of body) {
+-            hash.update(chunk);
+-          }
+-        } catch (error) {
+-          body.destroy();
+-          throw error;
+-        }
+-        return hash.digest("hex");
++  const hash = createHash5("sha256");
++  const metadata = await this.client.send(new HeadObjectCommand({Bucket: bucket, Key: key}));
++  const size = metadata.ContentLength;
++  if (!Number.isSafeInteger(size) || size < 0) throw new Error("Invalid object size for SHA256");
++  const rangeBytes = 64 * 1024 * 1024;
++  for (let start = 0; start < size; start += rangeBytes) {
++    const end = Math.min(size - 1, start + rangeBytes - 1);
++    const ranged = size > rangeBytes;
++    const out = await this.client.send(new GetObjectCommand2({
++      Bucket: bucket, Key: key,
++      ...(metadata.ETag ? {IfMatch: metadata.ETag} : {}),
++      ...(ranged ? {Range: `bytes=${start}-${end}`} : {})
++    }));
++    const body = extractStreamFromGet(out);
++    try {
++      if (ranged && out.ContentRange !== `bytes ${start}-${end}/${size}`) throw new Error("Unexpected object range for SHA256");
++      let received = 0;
++      for await (const chunk of body) {
++        received += chunk.length;
++        if (received > end - start + 1) throw new Error("Object range exceeds expected size");
++        hash.update(chunk);
+       }
+-      async readObject(bucket, key, maxBytes) {
++      if (received !== end - start + 1) throw new Error("Truncated object range for SHA256");
++    } catch (error) { body.destroy(); throw error; }
++  }
++  return hash.digest("hex");
++}
++            async readObject(bucket, key, maxBytes) {
+         const out = await this.client.send(new GetObjectCommand2({ Bucket: bucket, Key: key }));
+         const body = extractStreamFromGet(out);
+         if (maxBytes !== void 0 && out.ContentLength !== void 0 && out.ContentLength > maxBytes) {
+@@ -24016,6 +24032,42 @@ var init_StorageService = __esm({
+         }
+         return out;
+       }
++async copyLargeObjectForPublication({sourceBucket, sourceKey, destinationBucket, destinationKey, newContentType}, source) {
++  const partSize = Math.max(64 * 1024 * 1024, Math.ceil(source.ContentLength / 10000 / 1048576) * 1048576);
++  const partCount = Math.ceil(source.ContentLength / partSize);
++  const tags = await this.client.send(new GetObjectTaggingCommand({Bucket: sourceBucket, Key: sourceKey}));
++  const tagString = new URLSearchParams((tags.TagSet ?? []).map(t => [t.Key, t.Value])).toString();
++  const created = await this.client.send(new CreateMultipartUploadCommand({Bucket: destinationBucket, Key: destinationKey, ContentType: newContentType, ...(tagString ? {Tagging: tagString} : {})}));
++  if (!created.UploadId) throw new Error("Missing multipart copy upload ID");
++  const target = {Bucket: destinationBucket, Key: destinationKey, UploadId: created.UploadId};
++  let completed = false, next = 0, failed = false;
++  try {
++    const parts = new Array(partCount);
++    const results = await Promise.allSettled(Array.from({length: Math.min(4, partCount)}, async () => {
++      while (!failed) {
++        const index = next++;
++        if (index >= partCount) return;
++        try {
++          const start = index * partSize, end = Math.min(source.ContentLength - 1, start + partSize - 1);
++          const result = await this.client.send(new UploadPartCopyCommand({...target, PartNumber: index + 1,
++            CopySource: this.copySource(sourceBucket, sourceKey), CopySourceRange: `bytes=${start}-${end}`,
++            ...(source.ETag ? {CopySourceIfMatch: source.ETag} : {})}));
++          if (!result.CopyPartResult?.ETag) throw new Error("Missing multipart copy ETag");
++          parts[index] = {PartNumber: index + 1, ETag: result.CopyPartResult.ETag};
++        } catch (error) { failed = true; throw error; }
++      }
++    }));
++    const failure = results.find(r => r.status === "rejected");
++    if (failure) throw failure.reason;
++    await this.client.send(new CompleteMultipartUploadCommand({...target, MultipartUpload: {Parts: parts}}));
++    completed = true;
++  } finally {
++    if (!completed) await this.client.send(new AbortMultipartUploadCommand(target)).catch(error => {
++      Logger.warn({error}, "Failed to abort temporary multipart publication copy");
++    });
++  }
++}
++
+       async copyObject({
+         sourceBucket,
+         sourceKey,
+@@ -24027,6 +24079,13 @@ var init_StorageService = __esm({
+         if (isSameObject && !newContentType) {
+           return;
+         }
++        if (!isSameObject && newContentType) {
++          const source = await this.client.send(new HeadObjectCommand({Bucket: sourceBucket, Key: sourceKey}));
++          if (source.ContentLength > 64 * 1024 * 1024) {
++            await this.copyLargeObjectForPublication({sourceBucket, sourceKey, destinationBucket, destinationKey, newContentType}, source);
++            return;
++          }
++        }
+         try {
+           await this.client.send(
+             new CopyObjectCommand({
+@@ -129314,7 +129373,7 @@ var AttachmentProcessingService = class {
+         nsfw = metadata.nsfw;
+       }
+     }
+-    const needsLocalDownload = this.virusScanService.enabled || metadata == null || isSupportedMediaContentType(contentType);
++    const needsLocalDownload = this.virusScanService.enabled || isSupportedMediaContentType(contentType);
+     let sourceLocalPath = null;
+     try {
+       if (needsLocalDownload) {

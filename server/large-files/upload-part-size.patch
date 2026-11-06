@@ -1,0 +1,10 @@
+diff --git a/packages/constants/src/LimitConstants.ts b/packages/constants/src/LimitConstants.ts
+--- a/packages/constants/src/LimitConstants.ts
++++ b/packages/constants/src/LimitConstants.ts
+@@ -91,5 +91,5 @@
+ export function resolveAttachmentUploadPartSize(fileSize: number): number {
+ 	const raw = Math.ceil(fileSize / ATTACHMENT_UPLOAD_TARGET_PART_COUNT);
+ 	const aligned = Math.ceil(raw / ATTACHMENT_UPLOAD_CHUNK_SIZE_STEP) * ATTACHMENT_UPLOAD_CHUNK_SIZE_STEP;
+-	return Math.max(ATTACHMENT_UPLOAD_MIN_CHUNK_SIZE, aligned);
++	return Math.min(64 * 1024 * 1024, Math.max(ATTACHMENT_UPLOAD_MIN_CHUNK_SIZE, aligned));
+ }

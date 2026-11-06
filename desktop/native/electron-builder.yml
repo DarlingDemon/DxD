@@ -1,0 +1,45 @@
+appId: org.duckdns.darkdck.native
+productName: DxD Native
+electronVersion: 44.10.0
+npmRebuild: false
+directories:
+  app: payload
+  output: release
+files:
+  - from: .
+    filter: [package.json, LICENSE, 'dist/**', '!**/*.map']
+  - from: vendor
+    to: node_modules
+    filter: ['**/*']
+extraResources:
+  - from: payload/icons
+    to: icons
+  - from: payload/badges
+    to: badges
+asarUnpack:
+  - dist/renderer/**
+  - '**/*.node'
+  - '**/*.dll'
+  - '**/*.exe'
+  - '**/*.wasm'
+electronFuses:
+  # Fluxer probes its native modules in an isolated Electron-as-Node child.
+  runAsNode: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+protocols:
+  - name: DxD Native
+    schemes: [dxd-native]
+win:
+  target: nsis
+  icon: payload/icons/icon.ico
+nsis:
+  artifactName: DxD-Native-Setup-${version}-Windows-${arch}.exe
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  differentialPackage: false

@@ -1,0 +1,145 @@
+diff --git a/fluxer_desktop/scripts/build.mjs b/fluxer_desktop/scripts/build.mjs
+index fdd3b0b..cc5c4df 100644
+--- a/fluxer_desktop/scripts/build.mjs
++++ b/fluxer_desktop/scripts/build.mjs
+@@ -941,8 +941,13 @@ function runDesktopBuildStep(step) {
+ }
+ 
+ function ensureBuildChannelFile() {
+-	runDesktopBuildStep('set_build_channel');
++	if (process.env.DXD_PREPARED_BUILD_CHANNEL !== '1') {
++		runDesktopBuildStep('set_build_channel');
++	}
+ 	compiledBuildChannel = readGeneratedBuildChannel();
++	if (embeddedBuildChannel && compiledBuildChannel !== embeddedBuildChannel) {
++		throw new Error(`Generated build channel ${compiledBuildChannel} does not match ${embeddedBuildChannel}`);
++	}
+ }
+ 
+ function prunePackedRendererModules() {
+diff --git a/fluxer_desktop/src/common/Constants.ts b/fluxer_desktop/src/common/Constants.ts
+index c36edf4..480af0d 100644
+--- a/fluxer_desktop/src/common/Constants.ts
++++ b/fluxer_desktop/src/common/Constants.ts
+@@ -10,7 +10,7 @@ import {
+ 
+ const CHANNEL_APP_PROTOCOLS: Record<BuildChannel, string> = {
+ 	stable: 'fluxer',
+-	canary: 'fluxer',
++	canary: 'dxd-native',
+ 	development: 'fluxer-development',
+ };
+ export const APP_PROTOCOL = CHANNEL_APP_PROTOCOLS[BUILD_CHANNEL];
+diff --git a/fluxer_desktop/src/common/DesktopIdentity.ts b/fluxer_desktop/src/common/DesktopIdentity.ts
+index 3572b43..5536600 100644
+--- a/fluxer_desktop/src/common/DesktopIdentity.ts
++++ b/fluxer_desktop/src/common/DesktopIdentity.ts
+@@ -4,7 +4,7 @@ import {BUILD_CHANNEL, type BuildChannel} from '@electron/common/BuildChannel';
+ 
+ const DESKTOP_APP_NAMES: Record<BuildChannel, string> = {
+ 	stable: 'Fluxer',
+-	canary: 'Fluxer Canary',
++	canary: 'DxD Native',
+ 	development: 'Fluxer Development',
+ };
+ const MACOS_BUNDLE_IDS: Record<BuildChannel, string> = {
+@@ -29,17 +29,17 @@ const LINUX_PORTAL_SESSION_TOKENS: Record<BuildChannel, string> = {
+ };
+ const WINDOWS_VELOPACK_IDS: Record<BuildChannel, string> = {
+ 	stable: 'fluxer_desktop',
+-	canary: 'fluxer_desktop_canary',
++	canary: 'dxd_native',
+ 	development: 'fluxer_desktop_development',
+ };
+ const WINDOWS_APP_USER_MODEL_IDS: Record<BuildChannel, string> = {
+ 	stable: 'Fluxer.Fluxer',
+-	canary: 'Fluxer.Fluxer.Canary',
++	canary: 'org.duckdns.darkdck.native',
+ 	development: 'Fluxer.Fluxer.Development',
+ };
+ const WINDOWS_TOAST_ACTIVATOR_CLSIDS: Record<BuildChannel, string> = {
+ 	stable: '{48EEF21B-F3AE-431E-8CF2-386FFB2143F2}',
+-	canary: '{9CEDB5C0-3552-43B0-A279-2232E0CDF74C}',
++	canary: '{7837C7F2-2F7D-4640-A52D-534F13223AA6}',
+ 	development: '{B277AB5D-371C-4098-A76D-1DAE00AC0863}',
+ };
+ 
+@@ -51,7 +51,7 @@ export const LEGACY_LINUX_DESKTOP_ENTRY_ID = LEGACY_LINUX_DESKTOP_ENTRY_IDS[BUIL
+ export const LINUX_ICON_NAME = LEGACY_LINUX_DESKTOP_ENTRY_IDS[BUILD_CHANNEL];
+ export const WINDOWS_SHORTCUT_AUTHOR = 'Fluxer Platform AB';
+ export const WINDOWS_VELOPACK_ID = WINDOWS_VELOPACK_IDS[BUILD_CHANNEL];
+-export const WINDOWS_LEGACY_SQUIRREL_ID = 'fluxer_app';
++export const WINDOWS_LEGACY_SQUIRREL_ID = 'dxd_native_legacy';
+ export const WINDOWS_APP_USER_MODEL_ID = WINDOWS_APP_USER_MODEL_IDS[BUILD_CHANNEL];
+ export const WINDOWS_LEGACY_APP_USER_MODEL_IDS = [`velopack.${WINDOWS_VELOPACK_ID}`];
+ export const WINDOWS_TOAST_ACTIVATOR_CLSID = WINDOWS_TOAST_ACTIVATOR_CLSIDS[BUILD_CHANNEL];
+diff --git a/fluxer_desktop/src/common/UserDataPath.ts b/fluxer_desktop/src/common/UserDataPath.ts
+index 95f1b13..ef79640 100644
+--- a/fluxer_desktop/src/common/UserDataPath.ts
++++ b/fluxer_desktop/src/common/UserDataPath.ts
+@@ -16,7 +16,7 @@ type ChannelStorageDirectoryMap = Record<BuildChannel, string>;
+ 
+ const channelStorageDirectoryMap: ChannelStorageDirectoryMap = {
+ 	stable: 'fluxer',
+-	canary: 'fluxercanary',
++	canary: 'dxd-native',
+ 	development: 'fluxerdevelopment',
+ };
+ 
+diff --git a/fluxer_desktop/src/main/Bootstrap.ts b/fluxer_desktop/src/main/Bootstrap.ts
+index d6048a1..3b434ab 100644
+--- a/fluxer_desktop/src/main/Bootstrap.ts
++++ b/fluxer_desktop/src/main/Bootstrap.ts
+@@ -1,7 +1,6 @@
+ // SPDX-License-Identifier: AGPL-3.0-or-later
+ 
+ import fs from 'node:fs';
+-import {createRequire} from 'node:module';
+ import path from 'node:path';
+ import {BUILD_CHANNEL} from '@electron/common/BuildChannel';
+ import {WINDOWS_APP_USER_MODEL_ID, WINDOWS_TOAST_ACTIVATOR_CLSID} from '@electron/common/DesktopIdentity';
+@@ -24,30 +23,12 @@ import type {
+ 	ModuleUpdaterStatus,
+ } from '@electron/main/ModuleUpdater';
+ import type {SplashState, SplashStatus} from '@electron/main/SplashWindow';
+-import {repairWindowsShortcuts} from '@electron/main/WindowsShortcuts';
+ import {type BrowserWindow, app as electronApp} from 'electron';
+ 
+ declare const __FLUXER_MAIN_APP_OUTPUT_FILE__: string;
+ 
+-const requireModule = createRequire(import.meta.url);
+-
+ if (process.platform === 'win32') {
+-	const {VelopackApp} = requireModule('velopack') as typeof import('velopack');
+-	VelopackApp.build()
+-		.onAfterInstallFastCallback(() => {
+-			repairWindowsShortcuts();
+-		})
+-		.onAfterUpdateFastCallback(() => {
+-			repairWindowsShortcuts();
+-		})
+-		.onFirstRun(() => {
+-			repairWindowsShortcuts();
+-		})
+-		.onRestarted(() => {
+-			repairWindowsShortcuts();
+-		})
+-		.run();
+-	repairWindowsShortcuts();
++	// The DxD installer owns installation and shortcuts through NSIS.
+ 	electronApp.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID);
+ 	electronApp.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+ }
+diff --git a/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts b/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
+index b088691..0702c5c 100644
+--- a/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
++++ b/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
+@@ -174,7 +174,7 @@ export async function restoreRememberedRuntimePlan(instanceKey: string): Promise
+ }
+ 
+ export function desktopRuntimeInitialInput(): string | null {
+-	return getLaunchInstanceEndpointOverride();
++	return getLaunchInstanceEndpointOverride() ?? 'https://darkdck.duckdns.org/api';
+ }
+ 
+ async function fetchRuntimePlan(

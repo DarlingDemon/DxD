@@ -1,0 +1,32 @@
+{
+  "name": "dxd-windows",
+  "version": "1.0.0",
+  "description": "DxD desktop client for darkdck.duckdns.org",
+  "author": "DxD",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "org.duckdns.darkdck.desktop",
+    "productName": "DxD",
+    "directories": {"output": "release"},
+    "files": ["main.cjs", "offline.html", "app-icon.png"],
+    "win": {"target": "nsis", "icon": "app-icon.png"},
+    "nsis": {
+      "artifactName": "DxD-Setup-${version}-Windows-${arch}.exe",
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "differentialPackage": false
+    }
+  }
+}

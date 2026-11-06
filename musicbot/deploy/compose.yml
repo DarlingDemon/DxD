@@ -1,0 +1,135 @@
+name: remix-dxd
+services:
+  bot:
+    image: remix-dxd:fa5bc68
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "index.mjs"]
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      nodelink:
+        condition: service_healthy
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ../storage:/app/storage
+    environment:
+      TZ: Europe/Kyiv
+      HEARTBEAT_FILE: /tmp/remix-heartbeat
+    healthcheck:
+      test: ["CMD", "node", "docker/healthcheck.mjs"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    mem_limit: 1g
+    cpus: 1.5
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [audio, database]
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: remix
+      MYSQL_USER: remix
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    command: ["--innodb-buffer-pool-size=128M", "--max-connections=40"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/01-settings.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -u root --silent"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
+    mem_limit: 1g
+    cpus: 1.0
+    networks: [database]
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+  nodelink:
+    image: ghcr.io/performanc/nodelink@sha256:02912fbab1ac86596e31ed6fff261da8f93c1869ed36192af95fe3430e9a7655
+    restart: unless-stopped
+    environment:
+      NODELINK_SERVER_HOST: 0.0.0.0
+      NODELINK_SERVER_PORT: "3000"
+      NODELINK_SERVER_PASSWORD: ${NODELINK_PASSWORD}
+      NODELINK_SERVER_USEBUNSERVER: "false"
+      NODELINK_SERVER_AUTOUPDATE_ENABLED: "false"
+      NODELINK_CLUSTER_ENABLED: "false"
+      NODELINK_CLUSTER_SPECIALIZEDSOURCEWORKER_ENABLED: "false"
+      NODELINK_API_ENABLETRACKSTREAMENDPOINT: "true"
+      NODELINK_API_ENABLELOADSTREAMENDPOINT: "true"
+      NODELINK_LOGGING_LEVEL: info
+      NODELINK_LOGGING_FILE_ENABLED: "false"
+      NODELINK_SOURCES_LOCAL_ENABLED: "false"
+      NODELINK_SOURCES_HTTP_ENABLED: "true"
+      NODELINK_SOURCES_APPLEMUSIC_ENABLED: "false"
+      NODELINK_SOURCES_VKMUSIC_ENABLED: "false"
+      NODELINK_SOURCES_DEEZER_ENABLED: "false"
+      NODELINK_SOURCES_TIDAL_ENABLED: "false"
+      NODELINK_SOURCES_JIOSAAVN_ENABLED: "false"
+      NODELINK_SOURCES_GAANA_ENABLED: "false"
+      NODELINK_SOURCES_YANDEXMUSIC_ENABLED: "false"
+      NODELINK_SOURCES_ETERNALBOX_ENABLED: "false"
+      NODELINK_SOURCES_SONGLINK_ENABLED: "false"
+      NODELINK_SOURCES_FLOWERY_ENABLED: "false"
+      NODELINK_SOURCES_LAZYPYTTS_ENABLED: "false"
+      NODELINK_SOURCES_PIPERTTS_ENABLED: "false"
+      NODELINK_SOURCES_AUDIUS_ENABLED: "false"
+      NODELINK_SOURCES_QOBUZ_ENABLED: "false"
+      NODELINK_SOURCES_MONOCHROME_ENABLED: "false"
+      NODELINK_SOURCES_PANDORA_ENABLED: "false"
+      NODELINK_SOURCES_AMAZONMUSIC_ENABLED: "false"
+      NODELINK_SOURCES_BLUESKY_ENABLED: "false"
+      NODELINK_SOURCES_ANGHAMI_ENABLED: "false"
+      NODELINK_SOURCES_RSS_ENABLED: "false"
+      NODELINK_SOURCES_MIXCLOUD_ENABLED: "false"
+      NODELINK_SOURCES_AUDIOMACK_ENABLED: "false"
+      NODELINK_SOURCES_NEWGROUNDS_ENABLED: "false"
+      NODELINK_SOURCES_VIMEO_ENABLED: "false"
+      NODELINK_SOURCES_IHEARTRADIO_ENABLED: "false"
+      NODELINK_SOURCES_TELEGRAM_ENABLED: "false"
+      NODELINK_SOURCES_SHAZAM_ENABLED: "false"
+      NODELINK_SOURCES_BILIBILI_ENABLED: "false"
+      NODELINK_SOURCES_GENIUS_ENABLED: "false"
+      NODELINK_SOURCES_PINTEREST_ENABLED: "false"
+      NODELINK_SOURCES_GOOGLE-TTS_ENABLED: "false"
+      NODELINK_SOURCES_INSTAGRAM_ENABLED: "false"
+      NODELINK_SOURCES_KWAI_ENABLED: "false"
+      NODELINK_SOURCES_TWITCH_ENABLED: "false"
+      NODELINK_SOURCES_NICOVIDEO_ENABLED: "false"
+      NODELINK_SOURCES_REDDIT_ENABLED: "false"
+      NODELINK_SOURCES_TUMBLR_ENABLED: "false"
+      NODELINK_SOURCES_TWITTER_ENABLED: "false"
+      NODELINK_SOURCES_LASTFM_ENABLED: "false"
+      NODELINK_SOURCES_NETEASE_ENABLED: "false"
+      NODELINK_SOURCES_LETRASMUS_ENABLED: "false"
+      NODELINK_SOURCES_GOOGLEDRIVE_ENABLED: "false"
+      NODELINK_SOURCES_TIKTOK_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 12
+    mem_limit: 2g
+    cpus: 2.0
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [audio]
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  mysql_data:
+networks:
+  audio:
+  database:
+    internal: true
