@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {existsSync} from 'node:fs';
-import {dirname, join} from 'node:path';
+import {dirname, isAbsolute, join, relative, sep} from 'node:path';
 import {app} from 'electron';
 import './dist/main/index.js';
 
-// The unpacked build and portable copies should never run an installer.
-const uninstaller = join(dirname(process.execPath), 'Uninstall DxD Native.exe');
-if (process.platform === 'win32' && app.isPackaged && existsSync(uninstaller)) {
+const installDir = dirname(process.execPath);
+const uninstaller = join(installDir, 'Uninstall DxD Native.exe');
+const profile = relative(installDir, app.getPath('userData'));
+// NSIS replaces the installation tree. Only update installs with a separate profile.
+const profileIsSeparate = isAbsolute(profile) || profile === '..' || profile.startsWith(`..${sep}`);
+if (process.platform === 'win32' && app.isPackaged && profileIsSeparate && existsSync(uninstaller)) {
   void app.whenReady().then(async () => {
     const {default: updater} = await import('electron-updater');
     const {default: log} = await import('electron-log/main.js');
