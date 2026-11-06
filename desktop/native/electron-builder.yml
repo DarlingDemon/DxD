@@ -38,6 +38,7 @@ win:
 nsis:
   artifactName: DxD-Native-Setup-${version}-Windows-${arch}.exe
   oneClick: false
+  allowToChangeInstallationDirectory: true
   perMachine: false
   allowElevation: false
   createDesktopShortcut: true
