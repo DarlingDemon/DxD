@@ -1,0 +1,154 @@
+--- a/src/core/Bot.mjs
++++ b/src/core/Bot.mjs
+@@ -450,8 +450,7 @@
+ 
+   /**
+    * Periodic alone-check: for every active player, when no humans remain in
+-   * the channel, either arm the inactivity timer (music still queued) or
+-   * emit autoleave.
++   * the channel, arm the inactivity timer without extending an existing wait.
+    * @private
+    */
+   _runAloneCheck() {
+@@ -517,14 +516,9 @@
+           } catch(e) { logger.warn("[AloneCheck] LiveKit check error:", e?.message); }
+         }
+ 
+-        if (!hasHuman && !player._paused) {
+-          if (player.queue?.getCurrent() || !player.queue?.isEmpty()) {
+-            player._startInactivityTimer?.();
+-          } else {
+-            player._stopInactivityTimer?.();
+-            if (!player._stayInVoice) player.emit("autoleave");
+-          }
+-        } else if (hasHuman) {
++        if (!hasHuman) {
++          player._startInactivityTimer?.();
++        } else {
+           player._stopInactivityTimer?.();
+         }
+       } catch (e) {
+--- a/src/core/BotVoiceMixin.mjs
++++ b/src/core/BotVoiceMixin.mjs
+@@ -309,10 +309,6 @@
+         logger.inactivity(`[_spawnPlayer] autoleave suppressed — humans in channel ${cleanChannelId}`);
+         return;
+       }
+-      if (player.queue?.getCurrent() || !player.queue?.isEmpty()) {
+-        logger.inactivity(`[_spawnPlayer] autoleave suppressed — queue has songs in channel ${cleanChannelId}`);
+-        return;
+-      }
+ 
+       const activeChId = cleanId(player._channelId ?? cleanChannelId) || cleanChannelId;
+       const homeChId   = cleanId(player._home247Channel ?? activeChId) || activeChId;
+--- a/src/music/player/PlaybackMixin.mjs
++++ b/src/music/player/PlaybackMixin.mjs
+@@ -142,7 +142,7 @@
+       return;
+     }
+ 
+-    this._stopInactivityTimer();
++    this._startInactivityTimer();
+     this._wasRadio = songData.type === "radio";
+ 
+     if (!this._voiceConn || this.leaving) return;
+--- a/src/music/player/Player.mjs
++++ b/src/music/player/Player.mjs
+@@ -308,13 +308,12 @@
+   }
+ 
+   /**
+-   * Start the inactivity timer. Skipped when 24/7 is active, the queue has
+-   * songs, or humans are present. The timer callback re-checks all
+-   * conditions before emitting autoleave.
++   * Start a single empty-channel timer, including during playback or pause.
++   * Repeated checks preserve its deadline. Re-check occupancy and 24/7
++   * settings before emitting autoleave.
+    */
+   _startInactivityTimer() {
+-    this._stopInactivityTimer();
+-    if (this._inactivityLimit <= 0) return;
++    if (this._inactivityLimit <= 0 || this._destroyed || this.leaving) return;
+ 
+     if (this._stayInVoice) {
+       logger.inactivity(`[Player] stay-in-voice active for guild ${this._guildId} — skipping inactivity auto-leave`);
+@@ -329,25 +328,21 @@
+       return;
+     }
+ 
+-    if (this.queue?.getCurrent() || !this.queue?.isEmpty()) {
+-      logger.inactivity(`[Player] Queue has songs for guild ${this._guildId}, skipping inactivity timer`);
+-      return;
+-    }
+-
+     if (this._hasHumansInChannel()) {
++      this._stopInactivityTimer();
+       logger.inactivity(`[Player] Humans present in channel ${this._channelId}, skipping inactivity timer`);
+       return;
+     }
+ 
++    if (this._inactivityTimer) return;
++
+     logger.inactivity(`[Player] Starting inactivity timer for guild ${this._guildId} (${this._inactivityLimit / 1000}s)`);
+     this._inactivityTimer = setTimeout(() => {
++      this._inactivityTimer = null;
++      if (this._destroyed || this.leaving || this._stayInVoice) return;
+       const currentMode = this._get247Mode();
+       if (currentMode === "on") {
+         logger.inactivity(`[Player] 24/7 mode enabled during inactivity wait, aborting leave`);
+-        return;
+-      }
+-      if (this.queue?.getCurrent() || !this.queue?.isEmpty()) {
+-        logger.inactivity("[Player] Song in queue during inactivity wait, aborting leave");
+         return;
+       }
+       if (this._hasHumansInChannel()) {
+@@ -752,7 +747,7 @@
+     this._pausedAt = Date.now();
+     this._pauseTrackEndTimer();
+     this.emit("playback", false);
+-    this._stopInactivityTimer();
++    this._startInactivityTimer();
+     return ":pause_button: Paused";
+   }
+ 
+@@ -774,7 +769,7 @@
+     this._pausedAt = null;
+     this._resumeTrackEndTimer();
+     this.emit("playback", true);
+-    this._stopInactivityTimer();
++    this._startInactivityTimer();
+ 
+     const current = this.queue.getCurrent();
+     if (current?.url) {
+@@ -881,7 +876,7 @@
+     }
+     this.queue.add(d, t);
+     this.emit("update", "queue");
+-    this._stopInactivityTimer();
++    this._startInactivityTimer();
+   }
+ 
+   /** Clear the queue and start the inactivity timer if nothing is playing. */
+@@ -908,7 +903,7 @@
+     }
+     const added = this.queue.addMany(t, top);
+     this.emit("update", "queue");
+-    this._stopInactivityTimer();
++    this._startInactivityTimer();
+     return added;
+   }
+ 
+--- a/src/music/PlayerLifecycleMixin.mjs
++++ b/src/music/PlayerLifecycleMixin.mjs
+@@ -432,10 +432,6 @@
+         logger.inactivity(`[PlayerManager] autoleave suppressed — humans still in channel ${activeChannelId} (guild ${guildId})`);
+         return;
+       }
+-      if (player.queue?.getCurrent() || !player.queue?.isEmpty()) {
+-        logger.inactivity(`[PlayerManager] autoleave suppressed — queue has songs in channel ${activeChannelId} (guild ${guildId})`);
+-        return;
+-      }
+ 
+       this.playerMap.delete(activeChannelId);
+       this._unindexPlayer(player._guildId, activeChannelId);

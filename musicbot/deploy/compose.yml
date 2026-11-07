@@ -1,7 +1,7 @@
 name: remix-dxd
 services:
   bot:
-    image: remix-dxd:player-panel-auto-20261106
+    image: remix-dxd:empty-channel-20261107
     build:
       context: ..
       dockerfile: docker/Dockerfile
