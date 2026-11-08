@@ -9,6 +9,7 @@
 | [desktop/native](desktop/native) | Нативный Windows-клиент с сервером DxD по умолчанию и штатными модулями захвата Fluxer |
 | [desktop/web](desktop/web) | Установщик веб-клиента DxD для Windows |
 | [web/theme-import](web/theme-import) | Импорт тем BetterDiscord, адаптация панелей и автоматическая загрузка фона |
+| [web/music-controls](web/music-controls) | Настоящие кнопки MusicBot в сообщениях веб-клиента и DxD Native |
 | [server/large-files](server/large-files) | Части загрузки по 64 МиБ, хеширование диапазонами и multipart copy |
 | [musicbot](musicbot) | Сборка Remix, правка пути LiveKit и конфигурация MusicBot без учётных данных |
 

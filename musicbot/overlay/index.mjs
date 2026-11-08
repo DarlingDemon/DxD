@@ -9,8 +9,10 @@ import { logger } from "./src/core/Logger.mjs";
 import Remix from "./src/core/Bot.mjs";
 import { startHeartbeat } from "./src/core/Heartbeat.mjs";
 import { initErrorChannel, reportCrash } from "./src/core/ErrorChannel.mjs";
+import { startPlayerControlServer } from "./src/ui/PlayerControls.mjs";
 
 const remix = new Remix();
+const playerControls = await startPlayerControlServer(remix);
 startHeartbeat({ isReady: () => typeof remix.client.isReady === "function" ? remix.client.isReady() : Boolean(remix.client.user) });
 
 initErrorChannel({ config: remix.config, client: remix.client });
@@ -149,6 +151,7 @@ process.on("uncaughtExceptionMonitor", (err, origin) => {
  */
 const saveAndExit = async () => {
   logger.recovery("\n[Shutdown] Cleaning up before exit...");
+  playerControls.close();
   try {
     await remix.playerState?.saveAllFrom?.(remix.players);
   } catch (e) {

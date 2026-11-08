@@ -1,0 +1,288 @@
+--- a/commands/player.mjs
++++ b/commands/player.mjs
+@@ -1,16 +1,17 @@
+ /**
+  * @module commands/player
+- * @description Create an interactive player control panel with live progress, reaction controls,
+- * and embedded lyrics viewer. The panel embed construction, display constants and the lyrics
+- * viewer live in commands/player/; run() below owns the session lifecycle (timers, player
+- * event wiring and the control-reaction dispatcher).
++ * @description Create an interactive player control panel with live progress and authenticated inline button controls.
++ * The panel embed construction and display constants live in commands/player/; run() below owns the session lifecycle (timers, player
++ * event wiring and the control dispatcher).
+  */
+ 
++import { randomUUID } from "node:crypto";
++import { PlayerControlError, registerPlayerPanel } from "../src/ui/PlayerControls.mjs";
+ import { CommandBuilder } from "../src/commands/index.mjs";
+ import { Utils, cleanId } from "../src/utils/Utils.mjs";
+ import { getGlobalColor } from "../src/ui/index.mjs";
+ import { logger } from "../src/core/Logger.mjs";
+-import { CONTROLS, buildPlayerEmbed, openLyricsViewer, clearLyricsReactions } from "./player/index.mjs";
++import { CONTROLS, buildPlayerEmbed } from "./player/index.mjs";
+ import { panelText } from "./player/embed.mjs";
+ 
+ const pendingPanels = new WeakMap();
+@@ -66,7 +67,7 @@
+  * @async
+  * Run handler for the player command.
+  * Creates an interactive embed panel with playback controls, progress bar,
+- * volume display, and an embedded lyrics viewer.
++ * volume display, and authenticated controls.
+  * @param {object} msg - The command message wrapper.
+  * @returns {Promise<void>}
+  */
+@@ -77,18 +78,13 @@
+ 
+ async function openPanel(msg, player, session) {
+   const timeout = Math.max(60_000, this.config?.timers?.playerSessionTimeout ?? this.config?.playerAFKTimeout ?? 300000);
+-  const controlsLayout = [
+-    [CONTROLS.prev, CONTROLS.back, CONTROLS.play, CONTROLS.forward, CONTROLS.next],
+-    [CONTROLS.lyrics, CONTROLS.shuffle, CONTROLS.stop, CONTROLS.loop, CONTROLS.volDown, CONTROLS.volUp],
+-    [CONTROLS.filter, CONTROLS.close]
++  const allControls = [
++    CONTROLS.prev, CONTROLS.back, CONTROLS.play, CONTROLS.forward, CONTROLS.next,
++    CONTROLS.shuffle, CONTROLS.stop, CONTROLS.loop, CONTROLS.volDown, CONTROLS.volUp,
++    CONTROLS.close
+   ];
+-
+-  const allControls = controlsLayout.flat();
+-  const controlEmojis = allControls.map(c => c.emoji);
+-  const normalizeEmoji = (emoji) => emoji.replaceAll("\uFE0F", "");
+-  const observedEmojis = [...new Set(controlEmojis.flatMap(emoji => [emoji, normalizeEmoji(emoji)]))];
+-
+-  const message = await msg.reply({ embeds: [buildPlayerEmbed(this, msg, player, timeout)] });
++  const panelId = randomUUID();
++  const message = await msg.reply({ embeds: [buildPlayerEmbed(this, msg, player, timeout, { panelId })] });
+   if (!message?.message) return;
+ 
+   let sessionTimeout;
+@@ -98,30 +94,11 @@
+   let needsRefresh = false;
+   let statusMessage;
+   let _sessionClosed = false;
++  let unregisterPanel;
+   const history = [];
+   const remember = (line) => {
+     history.unshift(line);
+     if (history.length > 5) history.pop();
+-  };
+-
+-  /** @private @type {object} Shared lyrics-viewer session state (cleaned up by closeSession). */
+-  const lyrics = { activeLyricsMsg: null, unobserve: null, emojiTimeout: null };
+-
+-  /**
+-   * @private
+-   * Remove all control reactions from the player panel message.
+-   * @returns {Promise<void>}
+-   */
+-  const clearReactions = async () => {
+-    try {
+-      await message.message.removeAllReactions();
+-    } catch (e) {
+-      for (const emoji of controlEmojis) {
+-        try {
+-          await message.message.removeReaction(emoji);
+-        } catch(e) { logger.warn("[Player] Error:", e?.message); }
+-      }
+-    }
+   };
+ 
+   let editFailures = 0;
+@@ -141,7 +118,7 @@
+       refreshTimer = null;
+       if (_sessionClosed) return;
+       needsRefresh = false;
+-      const embed = buildPlayerEmbed(this, msg, player, timeout, { message: statusMessage, history });
++      const embed = buildPlayerEmbed(this, msg, player, timeout, { message: statusMessage, history, panelId });
+       editInFlight = message.edit({ embeds: [embed] })
+         .then((edited) => {
+           if (edited === null) void closeSession("missing");
+@@ -161,7 +138,7 @@
+    * @private
+    * @async
+    * Tear down the entire player session: clear timers, remove listeners,
+-   * clean up reactions, and edit the embed to show the closed state.
++   * expire authenticated controls, and edit the embed to show the closed state.
+    * @param {string} [reason="timeout"] - The reason for closing ("timeout", "user", "disconnected").
+    * @returns {Promise<void>}
+    */
+@@ -173,7 +150,7 @@
+     clearTimeout(sessionTimeout);
+     clearTimeout(refreshTimer);
+     clearInterval(updateInterval);
+-    unobserve?.();
++    unregisterPanel?.();
+ 
+     player.off("startplay", onStartPlay);
+     player.off("playback",  onPlayback);
+@@ -184,21 +161,14 @@
+     player.off("autoleave", onAutoLeave);
+     player.off("leave",     onAutoLeave);
+ 
+-    if (lyrics.unobserve) {
+-      lyrics.unobserve();
+-      clearTimeout(lyrics.emojiTimeout);
+-    }
+-    if (lyrics.activeLyricsMsg) {
+-      await clearLyricsReactions(lyrics.activeLyricsMsg);
+-    }
+-
+     await editInFlight;
+     if (reason === "missing") return;
+-    await clearReactions();
+ 
+     const closedEmbed = buildPlayerEmbed(this, msg, player, timeout, {
+       message: this.t(msg, "responses.player.sessionClosed", { reason: reason !== "timeout" ? ` • ${reason}` : "" }),
+       history,
++      panelId,
++      closed: true,
+     });
+     closedEmbed.setColor(getGlobalColor());
+     closedEmbed.setFooter({ text: this.t(msg, "responses._common.sessionEnded") });
+@@ -269,16 +239,36 @@
+   player.on("autoleave",  onAutoLeave);
+   player.on("leave",      onAutoLeave);
+ 
+-  const unobserve = message.onReaction(observedEmojis, async (e) => {
+-    const control = allControls.find(c => normalizeEmoji(c.emoji) === normalizeEmoji(e.emoji_id));
+-    if (!control || _sessionClosed || !e.user_id) return;
+-
++  const dispatch = async ({ action, user }) => {
++    const control = allControls.find(c => c.action === action);
++    if (!control) throw new PlayerControlError(400, "Unknown player control.");
++    if (_sessionClosed || player.leaving || player._destroyed) {
++      throw new PlayerControlError(410, "This player panel has closed. Use !player to open a new one.");
++    }
++    let voiceTimeout;
++    let channelId;
++    try {
++      ({ channelId } = await Promise.race([
++        this.players.checkVoiceChannels({ channel: { guildId: player._guildId }, author: { id: user.id } }),
++        new Promise((_, reject) => {
++          voiceTimeout = setTimeout(() => reject(new PlayerControlError(409, "Could not confirm your voice channel. Try again.")), 4000);
++          voiceTimeout.unref?.();
++        }),
++      ]));
++    } finally {
++      clearTimeout(voiceTimeout);
++    }
++    // Resolve voice state at execution time: an authenticated user may have moved
++    // while another action was waiting in the panel's serialized control queue.
++    if (!channelId || cleanId(channelId) !== cleanId(player._channelId)) {
++      throw new PlayerControlError(403, "Join the same voice channel as MusicBot to use these controls.");
++    }
++    if (_sessionClosed || player.leaving || player._destroyed) {
++      throw new PlayerControlError(410, "This player panel has closed. Use !player to open a new one.");
++    }
++    resetTimeout();
+     let reply = "";
+-
+     try {
+-      const { channelId } = await this.players.checkVoiceChannels({ guildId: player._guildId, author: { id: e.user_id } });
+-      if (_sessionClosed || player.leaving || player._destroyed || !channelId || cleanId(channelId) !== cleanId(player._channelId)) return;
+-      resetTimeout();
+       switch (control.action) {
+         case "previous": {
+           const previous = player._lastPlayedTrack;
+@@ -304,6 +294,8 @@
+           }
+           const step = control.action === "back" ? -20_000 : 20_000;
+           const position = Utils.clamp(Date.now() - player.startedPlaying + step, 0, Math.max(0, duration - 1000));
++          // The bridge's seek promise lasts until the restarted stream ends.
++          // Acknowledge initiation now so later pause/skip controls stay usable.
+           void player.seekToPosition(position).then((ok) => {
+             if (!ok) refresh({ message: "Could not seek this track." });
+           }).catch((error) => {
+@@ -381,32 +373,20 @@
+           break;
+         }
+ 
+-        case "filter":
+-          reply = this.t(msg, "responses.player.openingFilterPicker");
+-          try {
+-            const { run: runFilter } = await import("./filter.mjs");
+-            await runFilter.call(this, msg);
+-          } catch (err) {
+-            reply = this.t(msg, "responses.player.filterError", { error: Utils.truncate(err.message, 50) });
+-          }
+-          break;
+-
+-        case "lyrics":
+-          reply = await openLyricsViewer(this, msg, player, refresh, lyrics);
+-          break;
+-
+         case "close":
+           await closeSession("user");
+-          return;
++          return { ok: true };
+       }
+     } catch (err) {
+-      reply = this.t(msg, "responses.player.errorGeneric", { error: err.message });
+-    }
+-
+-    const actor = this.client?.users?.get?.(e.user_id)?.username;
++      logger.warn("[Player] Button action failed:", err?.message);
++      throw new PlayerControlError(409, "The player could not complete this action. Try again.");
++    }
++
++    const actor = user.username;
+     remember(`${control.emoji} ${control.desc}${actor ? ` · ${panelText(actor, 40)}` : ""}`);
+     refresh({ message: reply });
+-  });
++    return { ok: true };
++  };
+ 
+   session.refresh = refresh;
+   if (player.leaving || player._destroyed) {
+@@ -415,11 +395,16 @@
+   }
+   resetTimeout();
+   refresh();
+-  for (const control of allControls) {
+-    if (_sessionClosed) break;
+-    try {
+-      await message.message.react(control.emoji);
+-      await Utils.sleep(50);
+-    } catch(e) { logger.warn("[Player] Error:", e?.message); }
++  try {
++    unregisterPanel = registerPlayerPanel({
++      id: panelId,
++      messageId: String(message.id),
++      channelId: String(message.message.channelId),
++      guildId: String(player._guildId),
++      dispatch,
++    });
++  } catch (error) {
++    await closeSession("unavailable");
++    throw error;
+   }
+ }
+--- a/commands/player/embed.mjs
++++ b/commands/player/embed.mjs
+@@ -87,7 +87,7 @@
+     ...(queuePreview.length ? queuePreview : ["Queue is empty."]),
+     ``,
+     ...(state.history?.length ? ["**Recent activity**", ...state.history.map((line) => `• ${line}`), ""] : []),
+-    state.message ? `💬 ${state.message}` : "⏮️ Previous · ⏪/⏩ ±20 s · ⏯️ Pause/Resume · ⏭️ Next",
++    state.message ? `💬 ${state.message}` : "Use the buttons below from the same voice channel as MusicBot.",
+     ``,
+     `Panel closes after ${Math.ceil(timeout / 60000)} min idle.`
+   ].filter((line) => line !== null).join("\n");
+@@ -104,6 +104,16 @@
+         text: bot.t(msg, "responses.player.requestedBy", { username: msg.author?.username || "Unknown" }),
+         iconURL: avatarUrl
+       });
++  if (state.panelId) {
++    // Schema-supported metadata for DxD's inline controls. This remains a useful
++    // same-channel title link in clients without the custom control renderer.
++    const url = new URL(`/channels/${player._guildId}/${msg.channel.id}`, bot.config.instanceUrl);
++    url.searchParams.set("dxd_player", `v1.${state.panelId}`);
++    url.searchParams.set("paused", player.paused ? "1" : "0");
++    url.searchParams.set("loop", player.queue.songLoop ? "song" : player.queue.loop ? "queue" : "off");
++    if (state.closed) url.searchParams.set("closed", "1");
++    builder.setURL(url.href);
++  }
+   if (typeof builder.setTimestamp === "function") builder.setTimestamp();
+   if (current?.thumbnail) builder.setThumbnail(current.thumbnail);
+   return builder;

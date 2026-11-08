@@ -1,7 +1,7 @@
 name: remix-dxd
 services:
   bot:
-    image: remix-dxd:empty-channel-20261107
+    image: remix-dxd:player-buttons-20261108
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -28,7 +28,7 @@ services:
     cpus: 1.5
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
-    networks: [audio, database]
+    networks: [audio, database, fluxer]
     logging:
       options: {max-size: "10m", max-file: "3"}
   mysql:
@@ -130,6 +130,9 @@ services:
 volumes:
   mysql_data:
 networks:
+  fluxer:
+    external: true
+    name: fluxer_fluxer
   audio:
   database:
     internal: true

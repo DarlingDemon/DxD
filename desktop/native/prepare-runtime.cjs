@@ -7,6 +7,7 @@ const {patchRendererGpu} = require('./patch-renderer-gpu.cjs');
 const {patchRendererNativeEncoder} = require('./patch-renderer-native-encoder.cjs');
 const {patchRendererNativeEncoderUi} = require('./patch-renderer-native-encoder-ui.cjs');
 const {patchRendererNativeEncoderPolicy} = require('./patch-renderer-native-encoder-policy.cjs');
+const {patchRendererMusicControls} = require('./patch-renderer-music-controls.cjs');
 
 const upstreamVersion = '2026.1106.11354';
 const {version} = require('./package.json');
@@ -27,6 +28,7 @@ patchRendererGpu(path.join(desktop, 'dist/renderer'));
 patchRendererNativeEncoder(path.join(desktop, 'dist/renderer'));
 patchRendererNativeEncoderUi(path.join(desktop, 'dist/renderer'));
 patchRendererNativeEncoderPolicy(path.join(desktop, 'dist/renderer'));
+patchRendererMusicControls(path.join(desktop, 'dist/renderer'));
 fs.mkdirSync(payload, {recursive: true});
 fs.cpSync(path.join(runtime, 'node_modules'), path.join(payload, 'vendor'), {recursive: true});
 const dependencies = path.join(__dirname, 'node_modules');

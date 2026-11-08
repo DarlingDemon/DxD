@@ -1,0 +1,4 @@
+# Insert inside the DxD site before its generic handle_path /api/* route.
+handle /api/v1/musicbot/* {
+    reverse_proxy remix-dxd-bot-1:8787
+}

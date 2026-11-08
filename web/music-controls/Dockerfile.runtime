@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+FROM alpine:3.24 AS pack
+RUN apk add --no-cache brotli
+COPY dist /assets
+COPY precompress_assets.sh /usr/local/bin/precompress_assets.sh
+RUN PRECOMPRESS_BROTLI_QUALITY=5 PRECOMPRESS_JOBS=2 /usr/local/bin/precompress_assets.sh /assets
+FROM ghcr.io/fluxerapp/fluxer-app-proxy-self-hosted@sha256:e4c6c2fa7cdb0aeb2a336cced263db8b0d0f0b0d7505a469f064056bad702c79
+COPY --from=pack /assets /srv/app/static/
+ENV BUILD_VERSION=2026.1108.3-dxd-music-controls
+LABEL app.dxd.source-base="f5c30fdf8fc255b903b08c46afa42cd4188ea9df"
+LABEL app.dxd.local-change="Theme importer and authenticated MusicBot buttons"
