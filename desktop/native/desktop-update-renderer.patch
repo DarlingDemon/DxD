@@ -1,0 +1,15 @@
+diff --git a/fluxer_app/src/features/app/state/Updater.ts b/fluxer_app/src/features/app/state/Updater.ts
+index e1adf172..f42050fb 100644
+--- a/fluxer_app/src/features/app/state/Updater.ts
++++ b/fluxer_app/src/features/app/state/Updater.ts
+@@ -244,6 +244,10 @@ class Updater {
+ 
+ 	private async bootstrap(): Promise<void> {
+ 		if (getElectronAPI()?.offlineBuild === true) {
++			if (this.isNative) {
++				await this.bootstrapNative();
++				await this.bootstrapDesktopUpdate();
++			}
+ 			return;
+ 		}
+ 		if (this.isNative) {

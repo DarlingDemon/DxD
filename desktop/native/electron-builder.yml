@@ -7,7 +7,7 @@ directories:
   output: release
 files:
   - from: .
-    filter: [package.json, LICENSE, startup-update.mjs, encoder-runtime.cjs, native-encoder-main.cjs, 'dist/**', '!**/*.map']
+    filter: [package.json, LICENSE, startup-update.mjs, github-update-runtime.mjs, encoder-runtime.cjs, native-encoder-main.cjs, 'dist/**', '!**/*.map']
   - from: vendor
     to: node_modules
     filter: ['**/*']

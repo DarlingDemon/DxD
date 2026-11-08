@@ -87,7 +87,7 @@ index 95f1b139..ef796408 100644
  };
  
 diff --git a/fluxer_desktop/src/main/Bootstrap.ts b/fluxer_desktop/src/main/Bootstrap.ts
-index d6048a12..89338fee 100644
+index d6048a12..6219f710 100644
 --- a/fluxer_desktop/src/main/Bootstrap.ts
 +++ b/fluxer_desktop/src/main/Bootstrap.ts
 @@ -1,8 +1,8 @@
@@ -100,16 +100,21 @@ index d6048a12..89338fee 100644
  import {BUILD_CHANNEL} from '@electron/common/BuildChannel';
  import {WINDOWS_APP_USER_MODEL_ID, WINDOWS_TOAST_ACTIVATOR_CLSID} from '@electron/common/DesktopIdentity';
  import {resolveModulePollPlan} from '@electron/common/ModulePollPlan';
-@@ -15,7 +15,7 @@ import {
+@@ -15,7 +15,12 @@ import {
  import {checkDesktopUpdateNow} from '@electron/main/DesktopUpdateGate';
  import {armDesktopUpdatePoll, wakeDesktopUpdatePoll} from '@electron/main/DesktopUpdatePoll';
  import {DesktopUpdateRun, type DesktopUpdateTakeover} from '@electron/main/DesktopUpdateRun';
 -import {armOpenUrlForwarding, observeRendererLaunchConfirmed} from '@electron/main/ModuleBootHandoff';
-+import {armOpenUrlForwarding, observeRendererLaunchConfirmed, setDxDStartupUpdate} from '@electron/main/ModuleBootHandoff';
++import {
++	armOpenUrlForwarding,
++	observeRendererLaunchConfirmed,
++	setDxDStartupUpdate,
++	setDxDUpdateInstaller,
++} from '@electron/main/ModuleBootHandoff';
  import type {ModuleLaunchAttempt, ModuleStore as ModuleStoreInstance} from '@electron/main/ModuleStore';
  import type {
  	ModuleUpdater as ModuleUpdaterInstance,
-@@ -24,30 +24,12 @@ import type {
+@@ -24,30 +29,12 @@ import type {
  	ModuleUpdaterStatus,
  } from '@electron/main/ModuleUpdater';
  import type {SplashState, SplashStatus} from '@electron/main/SplashWindow';
@@ -141,7 +146,7 @@ index d6048a12..89338fee 100644
  	electronApp.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID);
  	electronApp.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
  }
-@@ -846,6 +828,12 @@ switch (MODULE_SYSTEM_LAUNCH.kind) {
+@@ -846,6 +833,18 @@ switch (MODULE_SYSTEM_LAUNCH.kind) {
  	case ModuleSystemLaunchDecision.DISABLED_BY_BUILD:
  	case ModuleSystemLaunchDecision.DISABLED_BY_REQUEST:
  		if (HAS_OFFLINE_RENDERER) {
@@ -150,6 +155,12 @@ index d6048a12..89338fee 100644
 +				const {checkStartupUpdate} = await import(updaterUrl.href);
 +				const splash = await import('@electron/main/SplashWindow');
 +				return checkStartupUpdate(splash, signal);
++			});
++			setDxDUpdateInstaller(async (signal) => {
++				const updaterUrl = pathToFileURL(path.join(electronApp.getAppPath(), 'startup-update.mjs'));
++				const {installDxDUpdate} = await import(updaterUrl.href);
++				const splash = await import('@electron/main/SplashWindow');
++				return installDxDUpdate(splash, signal);
 +			});
  			await import(MAIN_PROCESS_ENTRY_URL);
  		} else {
@@ -167,11 +178,148 @@ index b0886910..0702c5c4 100644
  }
  
  async function fetchRuntimePlan(
+diff --git a/fluxer_desktop/src/main/DxDNativeEncoder.ts b/fluxer_desktop/src/main/DxDNativeEncoder.ts
+new file mode 100644
+index 00000000..c8f3af71
+--- /dev/null
++++ b/fluxer_desktop/src/main/DxDNativeEncoder.ts
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: AGPL-3.0-or-later
++import {createRequire} from 'node:module';
++import path from 'node:path';
++import {app} from 'electron';
++
++const requireModule = createRequire(import.meta.url);
++
++export function registerDxDNativeEncoder(): void {
++  const bridge = requireModule(path.join(app.getAppPath(), 'native-encoder-main.cjs')) as {
++    register(): void;
++  };
++  bridge.register();
++}
+diff --git a/fluxer_desktop/src/main/DxDUpdater.ts b/fluxer_desktop/src/main/DxDUpdater.ts
+new file mode 100644
+index 00000000..f8e3956d
+--- /dev/null
++++ b/fluxer_desktop/src/main/DxDUpdater.ts
+@@ -0,0 +1,112 @@
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++import path from 'node:path';
++import {pathToFileURL} from 'node:url';
++import {createChildLogger} from '@electron/common/Logger';
++import {resolveModulePollPlan} from '@electron/common/ModulePollPlan';
++import {armDesktopUpdate, checkDesktopUpdateNow, publishDesktopUpdateCheck} from '@electron/main/DesktopUpdateGate';
++import {armDesktopUpdatePoll} from '@electron/main/DesktopUpdatePoll';
++import {onMainWindowReady, runDxDUpdateInstaller} from '@electron/main/ModuleBootHandoff';
++import {t} from '@electron/main/MainI18n';
++import {requirePrivilegedRendererDocumentSender} from '@electron/main/PrivilegedRendererDocuments';
++import {app, type BrowserWindow, dialog, ipcMain} from 'electron';
++
++const logger = createChildLogger('DxDUpdater');
++const DOWNLOAD_URL = 'https://github.com/DarlingDemon/DxD/releases/latest';
++type UpdaterContext = 'user' | 'background' | 'focus';
++interface DxDUpdateCheck {
++	readonly supported: boolean;
++	readonly available: boolean;
++	readonly version: string | null;
++}
++interface DxDUpdateRuntime {
++	readonly checkDxDUpdate: (options: {manual: boolean; signal: AbortSignal}) => Promise<DxDUpdateCheck>;
++}
++
++class UnsupportedDxDUpdateError extends Error {
++	constructor() {
++		super(`${t('desktop.update.manualDetail')}\n${DOWNLOAD_URL}`);
++	}
++}
++
++/** Wire the original update icon, menu and tray to the DxD GitHub feed. */
++export function registerDxDUpdater(getMainWindow: () => BrowserWindow | null): void {
++	const shutdown = new AbortController();
++	app.once('before-quit', () => shutdown.abort());
++	let runtime: Promise<DxDUpdateRuntime> | undefined;
++	let latest: DxDUpdateCheck | null = null;
++	let failurePrompt: Promise<unknown> | null = null;
++	const getRuntime = () => runtime ??= import(pathToFileURL(path.join(app.getAppPath(), 'startup-update.mjs')).href);
++	const send = (event: Record<string, unknown>) => {
++		const window = getMainWindow();
++		if (window != null && !window.isDestroyed()) window.webContents.send('updater-event', event);
++	};
++	const reportFailure = (error: unknown) => {
++		if (failurePrompt != null || shutdown.signal.aborted) return;
++		const options = {
++			type: 'warning' as const,
++			message: t('desktop.update.failedMessage'),
++			detail: `${t('desktop.update.failedDetail')}\n\n${error instanceof Error ? error.message : String(error)}`,
++			buttons: [t('desktop.update.ok')],
++			defaultId: 0,
++		};
++		const window = getMainWindow();
++		failurePrompt = (window != null && !window.isDestroyed() && window.isVisible()
++			? dialog.showMessageBox(window, options)
++			: dialog.showMessageBox(options))
++			.catch((promptError: unknown) => logger.warn('Could not show the update failure', {error: promptError}))
++			.finally(() => { failurePrompt = null; });
++	};
++	armDesktopUpdate({
++		check: async (manual) => {
++			const result: DxDUpdateCheck = await (await getRuntime()).checkDxDUpdate({manual, signal: shutdown.signal});
++			latest = result;
++			if (!result.supported) throw new UnsupportedDxDUpdateError();
++			return {shellNewer: result.available, modulesChanged: false};
++		},
++		start: async () => {
++			try {
++				if (runDxDUpdateInstaller == null) {
++					throw new Error(t('desktop.update.failedDetail'));
++				}
++				if (!(await runDxDUpdateInstaller(shutdown.signal))) {
++					publishDesktopUpdateCheck({shellNewer: false, modulesChanged: false});
++					send({type: 'not-available', context: 'user'});
++				}
++			} catch (error) {
++				logger.warn('The GitHub update did not install', {error});
++				reportFailure(error);
++				throw error;
++			}
++		},
++	});
++	ipcMain.handle('updater-check', async (event, context: unknown) => {
++		requirePrivilegedRendererDocumentSender(event, 'updater-check');
++		if (context !== 'user' && context !== 'background' && context !== 'focus') {
++			throw new TypeError('Invalid update check context');
++		}
++		const checkContext: UpdaterContext = context;
++		send({type: 'checking', context: checkContext});
++		try {
++			const state = await checkDesktopUpdateNow({manual: context === 'user'});
++			if (state.updating) return;
++			send(state.available
++				? {type: 'available', context: checkContext, version: latest?.version ?? null}
++				: {type: 'not-available', context: checkContext});
++		} catch (error) {
++			logger.warn('The GitHub update check failed', {error});
++			if (error instanceof UnsupportedDxDUpdateError) {
++				send({type: 'unsupported', context: checkContext, reason: app.isPackaged ? 'platform' : 'unpackaged', downloadUrl: DOWNLOAD_URL});
++			} else {
++				send({type: 'error', context: checkContext, message: error instanceof Error ? error.message : String(error)});
++			}
++		}
++	});
++	// Read-only checks keep the existing header icon current while the app runs.
++	// Installation still requires that icon/menu action, except the startup check.
++	onMainWindowReady(() => armDesktopUpdatePoll({
++		plan: resolveModulePollPlan(null),
++		check: () => checkDesktopUpdateNow(),
++		logger,
++	}, true));
++}
 diff --git a/fluxer_desktop/src/main/ModuleBootHandoff.ts b/fluxer_desktop/src/main/ModuleBootHandoff.ts
-index b7de1b16..eed46db0 100644
+index b7de1b16..03532b4a 100644
 --- a/fluxer_desktop/src/main/ModuleBootHandoff.ts
 +++ b/fluxer_desktop/src/main/ModuleBootHandoff.ts
-@@ -6,6 +6,12 @@ import {app, type BrowserWindow} from 'electron';
+@@ -6,6 +6,18 @@ import {app, type BrowserWindow} from 'electron';
  
  const logger = createChildLogger('ModuleBootHandoff');
  
@@ -179,6 +327,12 @@ index b7de1b16..eed46db0 100644
 +
 +export function setDxDStartupUpdate(check: NonNullable<typeof runDxDStartupUpdate>): void {
 +	runDxDStartupUpdate = check;
++}
++
++export let runDxDUpdateInstaller: ((signal: AbortSignal) => Promise<boolean>) | undefined;
++
++export function setDxDUpdateInstaller(install: NonNullable<typeof runDxDUpdateInstaller>): void {
++	runDxDUpdateInstaller = install;
 +}
 +
  type MainWindowListener = (window: BrowserWindow | null) => void;
@@ -200,7 +354,7 @@ index b5ac5629..546bdf22 100644
  		appendLinuxChromiumFlagsConfig(channel);
  	}
 diff --git a/fluxer_desktop/src/main/index.ts b/fluxer_desktop/src/main/index.ts
-index cb218350..f9594683 100644
+index cb218350..6c47f116 100644
 --- a/fluxer_desktop/src/main/index.ts
 +++ b/fluxer_desktop/src/main/index.ts
 @@ -19,7 +19,7 @@ import {
@@ -260,6 +414,19 @@ index cb218350..f9594683 100644
  				} catch (error: unknown) {
  					log.error('[Init] Failed to register native hardware encoder handlers:', error);
  				}
+@@ -612,7 +632,11 @@ if (launchConfigurationError) {
+ 						showWindow,
+ 					});
+ 				});
+-				if (process.env.FLUXER_OFFLINE !== '1' && !shouldDisableModuleUpdatesForLaunch()) {
++				if (process.env.FLUXER_OFFLINE === '1') {
++					const {registerDxDUpdater} = await import('@electron/main/DxDUpdater');
++					stopStartupIfQuitting();
++					registerDxDUpdater(getMainWindow);
++				} else if (!shouldDisableModuleUpdatesForLaunch()) {
+ 					const {registerUpdater} = await import('@electron/main/Updater');
+ 					stopStartupIfQuitting();
+ 					registerUpdater(getMainWindow);
 diff --git a/fluxer_desktop/src/preload/index.ts b/fluxer_desktop/src/preload/index.ts
 index b0667933..bcba7e20 100644
 --- a/fluxer_desktop/src/preload/index.ts
@@ -294,22 +461,3 @@ index b0667933..bcba7e20 100644
 +		return () => ipcRenderer.removeListener('dxd-native-encoder:settings-changed', listener);
 +	},
 +});
-
-diff --git a/fluxer_desktop/src/main/DxDNativeEncoder.ts b/fluxer_desktop/src/main/DxDNativeEncoder.ts
-new file mode 100644
---- /dev/null
-+++ b/fluxer_desktop/src/main/DxDNativeEncoder.ts
-@@ -0,0 +1,13 @@
-+// SPDX-License-Identifier: AGPL-3.0-or-later
-+import {createRequire} from 'node:module';
-+import path from 'node:path';
-+import {app} from 'electron';
-+
-+const requireModule = createRequire(import.meta.url);
-+
-+export function registerDxDNativeEncoder(): void {
-+  const bridge = requireModule(path.join(app.getAppPath(), 'native-encoder-main.cjs')) as {
-+    register(): void;
-+  };
-+  bridge.register();
-+}
