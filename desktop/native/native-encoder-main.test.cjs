@@ -104,6 +104,7 @@ function harness(t, options = {}) {
     };
     if (name === 'node:child_process') return {execFile(binaryName, args, flags, callback) {
       probes.push({binaryName, args, flags});
+      if (options.realRuntime) return require('node:child_process').execFile(binaryName, args, flags, callback);
       if (options.probe) options.probe(callback);
       else queueMicrotask(() => callback(null, '', ''));
     }};
@@ -224,7 +225,7 @@ test('native selection probes the exact backend and refuses unavailable GPUs or 
   await assert.rejects(driver.invoke(owner, 'select', 'amf'), /AMD AMF.*amfrt64.dll failed to open/);
   assert.equal((await driver.invoke(owner, 'settings')).backend, 'auto');
   assert.ok(driver.probes[0].args.includes('h264_amf'));
-  assert.ok(driver.probes[0].args.includes('color=black:size=128x128:rate=1'));
+  assert.ok(driver.probes[0].args.includes('color=black:size=320x180:rate=30'));
   assert.equal(driver.probes[0].flags.windowsHide, true);
   assert.equal(driver.probes[0].flags.timeout, 15000);
   const available = harness(t);
@@ -353,8 +354,10 @@ test('starts serialize per owner and application shutdown stops every active own
 
 test('optional cached real NVENC uses synthetic frames with actual IPC session ownership', {skip: !process.env.DXD_TEST_FFMPEG}, async t => {
   const h = harness(t, {realRuntime: true});
-  fs.writeFileSync(h.settings, JSON.stringify({backend: 'nvenc'}));
   const owner = new Owner(1);
+  const selected = await h.invoke(owner, 'select', 'nvenc');
+  assert.equal(selected.backend, 'nvenc');
+  assert.ok(h.probes[0].args.includes('color=black:size=320x180:rate=30'));
   const current = await h.invoke(owner, 'start', CONFIG);
   const firstFrame = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('No encoded IPC frame arrived')), 4000);

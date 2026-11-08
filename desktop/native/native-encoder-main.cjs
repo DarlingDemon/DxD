@@ -110,9 +110,9 @@ function ensureBinary() {
 async function probeBackend(backend, binary) {
   try {
     await promisify(execFile)(binary, [
-      '-hide_banner', '-nostdin', '-f', 'lavfi', '-i', 'color=black:size=128x128:rate=1',
-      '-frames:v', '1', '-an', '-c:v', backend === 'nvenc' ? 'h264_nvenc' : 'h264_amf',
-      '-bf', '0', '-f', 'null', '-',
+      '-hide_banner', '-nostdin', '-f', 'lavfi', '-i', 'color=black:size=320x180:rate=30',
+      '-frames:v', '2', '-an', '-c:v', backend === 'nvenc' ? 'h264_nvenc' : 'h264_amf',
+      '-bf', '0', '-b:v', '1000000', '-f', 'null', '-',
     ], {windowsHide: true, timeout: 15000, maxBuffer: 32768});
   } catch (error) {
     const detail = String(error.stderr ?? error.message).slice(-1500);
