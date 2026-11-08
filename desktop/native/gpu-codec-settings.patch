@@ -1,0 +1,155 @@
+diff --git a/fluxer_app/src/features/i18n/locales/ru/messages.po b/fluxer_app/src/features/i18n/locales/ru/messages.po
+index 0ffa23d6..1ee6a4af 100644
+--- a/fluxer_app/src/features/i18n/locales/ru/messages.po
++++ b/fluxer_app/src/features/i18n/locales/ru/messages.po
+@@ -44862,3 +44862,18 @@ msgstr "Увеличить"
+ #: src/features/user/components/settings_utils/search_index/KeybindsIndex.ts
+ msgid "Zoom out"
+ msgstr "Уменьшить"
++
++msgid "{codec} (hardware available)"
++msgstr "{codec} (доступно аппаратное кодирование)"
++
++msgid "{codec} (software encoding)"
++msgstr "{codec} (программное кодирование)"
++
++msgid "{codec} (hardware support unknown)"
++msgstr "{codec} (поддержка GPU неизвестна)"
++
++msgid "Detected GPU: {gpu}"
++msgstr "Обнаружена видеокарта: {gpu}"
++
++msgid "Use recommended for my GPU"
++msgstr "Подобрать для моей видеокарты"
+diff --git a/fluxer_app/src/features/i18n/locales/uk/messages.po b/fluxer_app/src/features/i18n/locales/uk/messages.po
+index c37a2868..f60f76b7 100644
+--- a/fluxer_app/src/features/i18n/locales/uk/messages.po
++++ b/fluxer_app/src/features/i18n/locales/uk/messages.po
+@@ -44862,3 +44862,18 @@ msgstr "Збільшити масштаб"
+ #: src/features/user/components/settings_utils/search_index/KeybindsIndex.ts
+ msgid "Zoom out"
+ msgstr "Зменшити масштаб"
++
++msgid "{codec} (hardware available)"
++msgstr "{codec} (доступне апаратне кодування)"
++
++msgid "{codec} (software encoding)"
++msgstr "{codec} (програмне кодування)"
++
++msgid "{codec} (hardware support unknown)"
++msgstr "{codec} (підтримка GPU невідома)"
++
++msgid "Detected GPU: {gpu}"
++msgstr "Виявлена відеокарта: {gpu}"
++
++msgid "Use recommended for my GPU"
++msgstr "Підібрати для моєї відеокарти"
+diff --git a/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx b/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx
+index 69ac2176..7525e6ec 100644
+--- a/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx
++++ b/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx
+@@ -122,6 +122,26 @@ const H265_REQUIRES_OPT_IN_OPTION_DESCRIPTOR = msg({
+ 	comment:
+ 		'Option label for the screen-share codec select while the HEVC opt-in is off and the option is disabled. H.265 is a codec name and should stay literal.',
+ });
++const HARDWARE_CODEC_OPTION_DESCRIPTOR = msg({
++	message: '{codec} (hardware available)',
++	comment: 'Screen-share codec option when hardware encoding is available. codec is the codec label.',
++});
++const SOFTWARE_CODEC_OPTION_DESCRIPTOR = msg({
++	message: '{codec} (software encoding)',
++	comment: 'Screen-share codec option when only software encoding was detected. codec is the codec label.',
++});
++const UNKNOWN_HARDWARE_CODEC_OPTION_DESCRIPTOR = msg({
++	message: '{codec} (hardware support unknown)',
++	comment: 'Screen-share codec option when hardware encoding support is unknown. codec is the codec label.',
++});
++const DETECTED_GPU_DESCRIPTOR = msg({
++	message: 'Detected GPU: {gpu}',
++	comment: 'Graphics card detected for screen-share codec recommendations. gpu is the graphics card name.',
++});
++const USE_RECOMMENDED_GPU_SETTINGS_DESCRIPTOR = msg({
++	message: 'Use recommended for my GPU',
++	comment: 'Button that selects an automatic screen-share codec and prefers available hardware encoding.',
++});
+ 
+ const SCREEN_SHARE_CODEC_OPTION_ORDER = ['av1', 'h265', 'h264', 'vp9', 'vp8'] as const;
+ 
+@@ -143,7 +163,7 @@ function useLoadedGpuEncoderReport(): HardwareEncodeReport | null {
+ export const ScreenShareCodecControl = observer(() => {
+ 	const {i18n} = useLingui();
+ 	const encoderMode = VoiceSettings.getScreenShareEncoderMode();
+-	useLoadedGpuEncoderReport();
++	const gpuReport = useLoadedGpuEncoderReport();
+ 	const automaticCodec = describeScreenShareEncoderPath(encoderMode).codec;
+ 	const av1OptIn = VoiceSettings.getScreenShareAv1OptIn();
+ 	const hevcOptIn = VoiceSettings.getScreenShareHevcOptIn();
+@@ -157,19 +177,58 @@ export const ScreenShareCodecControl = observer(() => {
+ 			} else if (codec === 'h265' && !hevcOptIn) {
+ 				label = i18n._(H265_REQUIRES_OPT_IN_OPTION_DESCRIPTOR);
+ 			}
+-			return {value: codec, label, isDisabled: !codecCapabilities[codec].supported};
++			const capability = codecCapabilities[codec];
++			let encodingDescriptor = UNKNOWN_HARDWARE_CODEC_OPTION_DESCRIPTOR;
++			if (capability.hardwareAccelerated === 'hardware') {
++				encodingDescriptor = HARDWARE_CODEC_OPTION_DESCRIPTOR;
++			} else if (capability.hardwareAccelerated === 'software') {
++				encodingDescriptor = SOFTWARE_CODEC_OPTION_DESCRIPTOR;
++			}
++			return {
++				value: codec,
++				label: i18n._(encodingDescriptor, {codec: label}),
++				isDisabled: !capability.supported,
++			};
+ 		}),
+ 	];
+ 	return (
+-		<Combobox<CodecPreference>
+-			value={VoiceSettings.getPreferredScreenShareCodec()}
+-			options={options}
+-			onChange={(value) => VoiceSettingsCommands.update({preferredScreenShareCodec: value})}
+-			density="compact"
+-			isSearchable={false}
+-			aria-label={i18n._(PREFERRED_SCREEN_SHARE_CODEC_DESCRIPTOR)}
+-			data-flx="user.advanced-settings-tab.select.preferred-screen-share-codec"
+-		/>
++		<div
++			className={styles.controlStackCompact}
++			style={{maxWidth: '24rem', minWidth: 0}}
++			data-flx="user.advanced-settings-tab.screen-share-codec-controls"
++		>
++			<Combobox<CodecPreference>
++				value={VoiceSettings.getPreferredScreenShareCodec()}
++				options={options}
++				onChange={(value) => VoiceSettingsCommands.update({preferredScreenShareCodec: value})}
++				density="compact"
++				isSearchable={false}
++				wrapMenuText
++				aria-label={i18n._(PREFERRED_SCREEN_SHARE_CODEC_DESCRIPTOR)}
++				data-flx="user.advanced-settings-tab.select.preferred-screen-share-codec"
++			/>
++			{gpuReport?.gpuLabel && (
++				<>
++					<p
++						className={styles.settingDescription}
++						style={{overflowWrap: 'anywhere'}}
++						data-flx="user.advanced-settings-tab.screen-share-codec-detected-gpu"
++					>
++						{i18n._(DETECTED_GPU_DESCRIPTOR, {gpu: gpuReport.gpuLabel})}
++					</p>
++					<Button
++						variant="secondary"
++						compact
++						onClick={() =>
++							VoiceSettingsCommands.update({preferredScreenShareCodec: 'auto', screenShareEncoderMode: 'hardware'})
++						}
++						data-flx="user.advanced-settings-tab.screen-share-codec-use-gpu-recommendation"
++					>
++						{i18n._(USE_RECOMMENDED_GPU_SETTINGS_DESCRIPTOR)}
++					</Button>
++				</>
++			)}
++		</div>
+ 	);
+ });
+ 

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const asar = require('../web/node_modules/@electron/asar');
+const {patchRendererGpu} = require('./patch-renderer-gpu.cjs');
 
 const upstreamVersion = '2026.1106.11354';
 const {version} = require('./package.json');
@@ -19,6 +20,7 @@ const desktop = path.join(__dirname, '../../upstream/native/fluxer_desktop');
 if (!fs.existsSync(path.join(runtime, 'package.json'))) asar.extractAll(archive, runtime);
 assert.equal(JSON.parse(fs.readFileSync(path.join(runtime, 'dist/renderer/version.json'))).version, upstreamVersion);
 fs.cpSync(path.join(runtime, 'dist/renderer'), path.join(desktop, 'dist/renderer'), {recursive: true});
+patchRendererGpu(path.join(desktop, 'dist/renderer'));
 fs.mkdirSync(payload, {recursive: true});
 fs.cpSync(path.join(runtime, 'node_modules'), path.join(payload, 'vendor'), {recursive: true});
 const dependencies = path.join(__dirname, 'node_modules');
