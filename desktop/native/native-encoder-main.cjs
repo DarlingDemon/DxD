@@ -53,8 +53,13 @@ function selectedBackend() {
 }
 
 async function getSettings() {
-  const info = await app.getGPUInfo('basic');
-  const devices = info.gpuDevice ?? info.devices ?? [];
+  let devices = [];
+  try {
+    const info = await app.getGPUInfo('basic');
+    devices = info.gpuDevice ?? info.devices ?? [];
+  } catch {
+    // Automatic sharing and resetting the preference remain available without a GPU report.
+  }
   return {
     backend: selectedBackend(),
     installed: fs.existsSync(binaryPath()),

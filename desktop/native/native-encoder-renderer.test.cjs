@@ -68,13 +68,24 @@ function fixture(backend = 'nvenc') {
 test('automatic mode delegates the exact publication; cameras and audio never query native settings', async () => {
   const f = fixture('auto'), options = {videoCodec: 'vp9', simulcast: true};
   await f.participant.publishOrRepublishTrack(f.track, options, true);
-  assert.equal(f.calls[1].options, options);
-  assert.deepEqual(f.calls[1].rest, [true]);
+  assert.equal(f.calls[0].options, options);
+  assert.deepEqual(f.calls[0].rest, [true]);
+  assert.deepEqual(f.calls.map(call => call.type), ['publish']);
   assert.equal(f.workers.length, 0);
   f.calls.length = 0;
   await f.participant.publishOrRepublishTrack({...f.track, source: 'camera'}, options);
   await f.participant.publishOrRepublishTrack({...f.track, kind: 'audio'}, options);
   assert.deepEqual(f.calls.map(call => call.type), ['publish', 'publish']);
+});
+
+test('automatic sharing never queries GPU settings even when that IPC would reject', async () => {
+  const f = fixture('auto'), options = {videoCodec: 'vp9'};
+  f.bridge.getSettings = async () => {throw new Error('GPU info unavailable');};
+  f.participant.retryOnce = true;
+  await f.participant.publishOrRepublishTrack(f.track, options);
+  assert.deepEqual(f.calls.map(call => call.type), ['publish', 'publish']);
+  assert.ok(f.calls.every(call => call.options === options));
+  assert.equal(f.workers.length, 0);
 });
 
 test('native publication forces a single H264 layer and preserves timestamp across throttled restarts', async () => {

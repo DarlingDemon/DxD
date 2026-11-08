@@ -75,6 +75,7 @@ function harness(t, options = {}) {
   app.getPath = name => { assert.equal(name, 'userData'); return profile; };
   app.getGPUInfo = async kind => {
     assert.equal(kind, 'basic');
+    if (options.gpuError) throw new Error('GPU information unavailable');
     return {gpuDevice: options.gpus ?? [{vendorId: 0x10de, active: true}]};
   };
   const electron = {
@@ -380,4 +381,14 @@ test('optional cached real NVENC uses synthetic frames with actual IPC session o
   assert.equal(h.networkCalls(), 0);
   await h.invoke(owner, 'stop', current.id);
   await assert.rejects(h.invoke(owner, 'frame', current.id, {data: bytes, timestamp: 999999}), /session has ended/);
+});
+
+test('Automatic can be selected when the desktop GPU report fails', async t => {
+  const h = harness(t, {gpuError: true});
+  fs.writeFileSync(h.settings, JSON.stringify({backend: 'nvenc'}));
+  const selected = await h.invoke(new Owner(1), 'select', 'auto');
+  assert.equal(selected.backend, 'auto');
+  assert.equal(selected.backends.nvenc, false);
+  assert.equal(selected.backends.amf, false);
+  assert.equal(h.networkCalls(), 0);
 });

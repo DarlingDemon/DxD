@@ -182,6 +182,7 @@
     prototype.publishOrRepublishTrack = async function(track, options, ...rest) {
       const bridge = globalThis.dxdNativeEncoder;
       if (!bridge || !isScreen(track, options)) return publish.call(this, track, options, ...rest);
+      if (desiredBackend === 'auto' && activeSessions.size === 0 && !publications.has(track)) return publish.call(this, track, options, ...rest);
       const pending = publications.get(track);
       // LiveKit retries negotiation from inside its own outstanding publication.
       if (pending && rest[1] === true) return publish.call(this, track, options, ...rest);
