@@ -1,7 +1,7 @@
 name: remix-dxd
 services:
   bot:
-    image: remix-dxd:player-buttons-20261108
+    image: remix-dxd:panel-marker-20261108
     build:
       context: ..
       dockerfile: docker/Dockerfile

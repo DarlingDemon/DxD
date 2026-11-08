@@ -1,0 +1,13 @@
+diff --git a/commands/player/embed.mjs b/commands/player/embed.mjs
+index cb28585..867feaa 100644
+--- a/commands/player/embed.mjs
++++ b/commands/player/embed.mjs
+@@ -111,7 +111,7 @@ export function buildPlayerEmbed(bot, msg, player, timeout, state = {}) {
+     url.searchParams.set("dxd_player", `v1.${state.panelId}`);
+     url.searchParams.set("paused", player.paused ? "1" : "0");
+     url.searchParams.set("loop", player.queue.songLoop ? "song" : player.queue.loop ? "queue" : "off");
+-    if (state.closed) url.searchParams.set("closed", "1");
++    url.searchParams.set("closed", state.closed ? "1" : "0");
+     builder.setURL(url.href);
+   }
+   if (typeof builder.setTimestamp === "function") builder.setTimestamp();
