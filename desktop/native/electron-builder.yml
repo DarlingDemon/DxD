@@ -1,13 +1,13 @@
 appId: org.duckdns.darkdck.native
 productName: DxD Native
-electronVersion: 44.10.0
+electronVersion: 45.2.3
 npmRebuild: false
 directories:
   app: payload
   output: release
 files:
   - from: .
-    filter: [package.json, LICENSE, startup-update.mjs, 'dist/**', '!**/*.map']
+    filter: [package.json, LICENSE, startup-update.mjs, encoder-runtime.cjs, native-encoder-main.cjs, 'dist/**', '!**/*.map']
   - from: vendor
     to: node_modules
     filter: ['**/*']

@@ -4,6 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const asar = require('../web/node_modules/@electron/asar');
 const {patchRendererGpu} = require('./patch-renderer-gpu.cjs');
+const {patchRendererNativeEncoder} = require('./patch-renderer-native-encoder.cjs');
+const {patchRendererNativeEncoderUi} = require('./patch-renderer-native-encoder-ui.cjs');
+const {patchRendererNativeEncoderPolicy} = require('./patch-renderer-native-encoder-policy.cjs');
 
 const upstreamVersion = '2026.1106.11354';
 const {version} = require('./package.json');
@@ -21,6 +24,9 @@ if (!fs.existsSync(path.join(runtime, 'package.json'))) asar.extractAll(archive,
 assert.equal(JSON.parse(fs.readFileSync(path.join(runtime, 'dist/renderer/version.json'))).version, upstreamVersion);
 fs.cpSync(path.join(runtime, 'dist/renderer'), path.join(desktop, 'dist/renderer'), {recursive: true});
 patchRendererGpu(path.join(desktop, 'dist/renderer'));
+patchRendererNativeEncoder(path.join(desktop, 'dist/renderer'));
+patchRendererNativeEncoderUi(path.join(desktop, 'dist/renderer'));
+patchRendererNativeEncoderPolicy(path.join(desktop, 'dist/renderer'));
 fs.mkdirSync(payload, {recursive: true});
 fs.cpSync(path.join(runtime, 'node_modules'), path.join(payload, 'vendor'), {recursive: true});
 const dependencies = path.join(__dirname, 'node_modules');
@@ -29,6 +35,9 @@ fs.cpSync(dependencies, path.join(payload, 'vendor'), {
   filter: (source) => source === dependencies || !path.basename(source).startsWith('.'),
 });
 fs.copyFileSync(path.join(__dirname, 'startup-update.mjs'), path.join(payload, 'startup-update.mjs'));
+for (const file of ['encoder-runtime.cjs', 'native-encoder-main.cjs']) {
+  fs.copyFileSync(path.join(__dirname, file), path.join(payload, file));
+}
 for (const directory of ['icons', 'badges']) {
   fs.cpSync(path.join(upstream, directory), path.join(payload, directory), {recursive: true});
 }

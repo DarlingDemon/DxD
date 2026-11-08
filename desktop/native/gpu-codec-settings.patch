@@ -45,9 +45,18 @@ index c37a2868..f60f76b7 100644
 +msgid "Use recommended for my GPU"
 +msgstr "Підібрати для моєї відеокарти"
 diff --git a/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx b/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx
-index 69ac2176..7525e6ec 100644
+index 69ac2176..04e5c127 100644
 --- a/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx
 +++ b/fluxer_app/src/features/user/components/modals/tabs/advanced_settings_tab/AdvancedVideoControls.tsx
+@@ -45,7 +45,7 @@ import {msg} from '@lingui/core/macro';
+ import {useLingui} from '@lingui/react/macro';
+ import {GearIcon} from '@phosphor-icons/react';
+ import {observer} from 'mobx-react-lite';
+-import {useCallback, useEffect, useState} from 'react';
++import {useCallback, useEffect, useRef, useState} from 'react';
+ 
+ const PAUSE_PREVIEW_BACKGROUND_DESCRIPTOR = msg({
+ 	message: 'Pause my screen share preview in the background',
 @@ -122,6 +122,26 @@ const H265_REQUIRES_OPT_IN_OPTION_DESCRIPTOR = msg({
  	comment:
  		'Option label for the screen-share codec select while the HEVC opt-in is off and the option is disabled. H.265 is a codec name and should stay literal.',
@@ -75,7 +84,178 @@ index 69ac2176..7525e6ec 100644
  
  const SCREEN_SHARE_CODEC_OPTION_ORDER = ['av1', 'h265', 'h264', 'vp9', 'vp8'] as const;
  
-@@ -143,7 +163,7 @@ function useLoadedGpuEncoderReport(): HardwareEncodeReport | null {
+@@ -140,10 +160,178 @@ function useLoadedGpuEncoderReport(): HardwareEncodeReport | null {
+ 	return gpuReport;
+ }
+ 
++type NativeEncoderBackend = 'auto' | 'nvenc' | 'amf';
++
++interface NativeEncoderSettings {
++	backend: NativeEncoderBackend;
++	backends: {nvenc: boolean; amf: boolean};
++	installed: boolean;
++}
++
++interface NativeEncoderBridge {
++	getSettings(): Promise<NativeEncoderSettings>;
++	setBackend(backend: NativeEncoderBackend): Promise<NativeEncoderSettings>;
++}
++
++const NATIVE_ENCODER_MESSAGES = {
++	en: {
++		label: 'Screen share encoder',
++		auto: 'Auto (WebRTC)',
++		description:
++			'The first GPU encoder selection downloads required components and checks your GPU. Applies to the next screen share. Codec preferences apply to Auto (WebRTC); native encoders always use H.264.',
++		loading: 'Loading encoder settings…',
++		saving: 'Saving encoder selection…',
++		preparing: 'Downloading components and checking the GPU… This may take up to 3 minutes.',
++		failure: 'Could not select the screen share encoder',
++	},
++	ru: {
++		label: 'Кодировщик демонстрации',
++		auto: 'Авто (WebRTC)',
++		description:
++			'При первом выборе GPU-кодировщика загружаются необходимые компоненты и проверяется видеокарта. Применяется к следующей демонстрации. Настройки кодека действуют в режиме «Авто (WebRTC)»; нативные кодировщики всегда используют H.264.',
++		loading: 'Загрузка настроек кодировщика…',
++		saving: 'Сохранение кодировщика…',
++		preparing: 'Загрузка компонентов и проверка видеокарты… Это может занять до 3 минут.',
++		failure: 'Не удалось выбрать кодировщик демонстрации',
++	},
++	uk: {
++		label: 'Кодувальник демонстрації',
++		auto: 'Авто (WebRTC)',
++		description:
++			'Під час першого вибору GPU-кодувальника завантажуються необхідні компоненти та перевіряється відеокарта. Застосовується до наступної демонстрації. Налаштування кодека діють у режимі «Авто (WebRTC)»; нативні кодувальники завжди використовують H.264.',
++		loading: 'Завантаження налаштувань кодувальника…',
++		saving: 'Збереження кодувальника…',
++		preparing: 'Завантаження компонентів і перевірка відеокарти… Це може тривати до 3 хвилин.',
++		failure: 'Не вдалося вибрати кодувальник демонстрації',
++	},
++};
++
++function getNativeEncoderBridge(): NativeEncoderBridge | null {
++	if (typeof window === 'undefined') return null;
++	const api = (window as unknown as {dxdNativeEncoder?: NativeEncoderBridge}).dxdNativeEncoder;
++	return api && typeof api.getSettings === 'function' && typeof api.setBackend === 'function' ? api : null;
++}
++
++export function ScreenShareNativeEncoderControl() {
++	const {i18n} = useLingui();
++	const [bridge] = useState(getNativeEncoderBridge);
++	const [settings, setSettings] = useState<NativeEncoderSettings | null>(null);
++	const [busy, setBusy] = useState(!!bridge);
++	const [pending, setPending] = useState<NativeEncoderBackend | null>(null);
++	const [error, setError] = useState('');
++	const active = useRef(false);
++	const request = useRef(!!bridge);
++	useEffect(() => {
++		if (!bridge) return;
++		let cancelled = false;
++		active.current = true;
++		void (async () => {
++			try {
++				const result = await bridge.getSettings();
++				if (!cancelled) setSettings(result);
++			} catch (error) {
++				if (!cancelled) setError(error instanceof Error ? error.message : String(error));
++			} finally {
++				if (!cancelled) {
++					request.current = false;
++					setBusy(false);
++				}
++			}
++		})();
++		return () => {
++			cancelled = true;
++			active.current = false;
++		};
++	}, [bridge]);
++	if (!bridge) return null;
++	const locale = String(i18n.locale || 'en').toLowerCase().split('-')[0];
++	const messages = NATIVE_ENCODER_MESSAGES[locale as keyof typeof NATIVE_ENCODER_MESSAGES] || NATIVE_ENCODER_MESSAGES.en;
++	const options: ReadonlyArray<ComboboxOption<NativeEncoderBackend>> = [
++		{value: 'auto', label: messages.auto},
++		{value: 'nvenc', label: 'NVIDIA NVENC (H.264)', isDisabled: !settings?.backends.nvenc},
++		{value: 'amf', label: 'AMD AMF (H.264)', isDisabled: !settings?.backends.amf},
++	];
++	const onChange = async (backend: NativeEncoderBackend) => {
++		if (
++			!active.current ||
++			!settings ||
++			request.current ||
++			!['auto', 'nvenc', 'amf'].includes(backend) ||
++			backend === settings.backend ||
++			(backend !== 'auto' && !settings.backends[backend])
++		) {
++			return;
++		}
++		request.current = true;
++		setBusy(true);
++		setPending(backend);
++		setError('');
++		try {
++			const result = await bridge.setBackend(backend);
++			if (active.current) setSettings(result);
++		} catch (error) {
++			if (active.current) setError(error instanceof Error ? error.message : String(error));
++		} finally {
++			if (active.current) {
++				request.current = false;
++				setBusy(false);
++				setPending(null);
++			}
++		}
++	};
++	return (
++		<div
++			className={styles.controlStackCompact}
++			aria-busy={busy}
++			data-flx="user.advanced-settings-tab.native-encoder-controls"
++		>
++			<Combobox<NativeEncoderBackend>
++				label={messages.label}
++				aria-label={messages.label}
++				value={settings?.backend || 'auto'}
++				options={options}
++				onChange={onChange}
++				disabled={busy || !settings}
++				isLoading={busy}
++				density="compact"
++				isSearchable={false}
++				wrapMenuText
++				data-flx="user.advanced-settings-tab.select.native-encoder"
++			/>
++			<p className={styles.settingDescription} data-flx="user.advanced-settings-tab.native-encoder-description">
++				{messages.description}
++			</p>
++			{busy && (
++				<p
++					className={styles.settingDescription}
++					role="status"
++					aria-live="polite"
++					data-flx="user.advanced-settings-tab.native-encoder-status"
++				>
++					{!settings
++						? messages.loading
++						: pending !== 'auto' && !settings.installed
++							? messages.preparing
++							: messages.saving}
++				</p>
++			)}
++			{error && (
++				<p
++					className={styles.settingDescription}
++					role="alert"
++					data-flx="user.advanced-settings-tab.native-encoder-error"
++				>
++					{messages.failure}: {error}
++				</p>
++			)}
++		</div>
++	);
++}
++
  export const ScreenShareCodecControl = observer(() => {
  	const {i18n} = useLingui();
  	const encoderMode = VoiceSettings.getScreenShareEncoderMode();
@@ -84,7 +264,7 @@ index 69ac2176..7525e6ec 100644
  	const automaticCodec = describeScreenShareEncoderPath(encoderMode).codec;
  	const av1OptIn = VoiceSettings.getScreenShareAv1OptIn();
  	const hevcOptIn = VoiceSettings.getScreenShareHevcOptIn();
-@@ -157,19 +177,58 @@ export const ScreenShareCodecControl = observer(() => {
+@@ -157,19 +345,59 @@ export const ScreenShareCodecControl = observer(() => {
  			} else if (codec === 'h265' && !hevcOptIn) {
  				label = i18n._(H265_REQUIRES_OPT_IN_OPTION_DESCRIPTOR);
  			}
@@ -149,7 +329,23 @@ index 69ac2176..7525e6ec 100644
 +					</Button>
 +				</>
 +			)}
++			<ScreenShareNativeEncoderControl data-flx="user.advanced-settings-tab.native-encoder-control" />
 +		</div>
  	);
  });
  
+diff --git a/fluxer_app/src/features/voice/state/VoiceSettings.ts b/fluxer_app/src/features/voice/state/VoiceSettings.ts
+index 141ef3ae..4d87e5cc 100644
+--- a/fluxer_app/src/features/voice/state/VoiceSettings.ts
++++ b/fluxer_app/src/features/voice/state/VoiceSettings.ts
+@@ -876,6 +876,10 @@ class VoiceSettings {
+ 	}
+ 
+ 	getPreferredScreenShareCodec(): CodecPreference {
++		const nativeEncoder = (
++			globalThis as typeof globalThis & {dxdNativeEncoderRenderer?: {getBackend(): string}}
++		).dxdNativeEncoderRenderer;
++		if (nativeEncoder && nativeEncoder.getBackend() !== 'auto') return 'h264';
+ 		if (this.preferredScreenShareCodec === 'av1' && !this.screenShareAv1OptIn) return 'auto';
+ 		if (this.preferredScreenShareCodec === 'h265' && !this.screenShareHevcOptIn) return 'auto';
+ 		return this.preferredScreenShareCodec;

@@ -1,5 +1,5 @@
 diff --git a/fluxer_desktop/scripts/build.mjs b/fluxer_desktop/scripts/build.mjs
-index fdd3b0b..cc5c4df 100644
+index fdd3b0b3..cc5c4dfe 100644
 --- a/fluxer_desktop/scripts/build.mjs
 +++ b/fluxer_desktop/scripts/build.mjs
 @@ -941,8 +941,13 @@ function runDesktopBuildStep(step) {
@@ -18,7 +18,7 @@ index fdd3b0b..cc5c4df 100644
  
  function prunePackedRendererModules() {
 diff --git a/fluxer_desktop/src/common/Constants.ts b/fluxer_desktop/src/common/Constants.ts
-index c36edf4..480af0d 100644
+index c36edf46..480af0db 100644
 --- a/fluxer_desktop/src/common/Constants.ts
 +++ b/fluxer_desktop/src/common/Constants.ts
 @@ -10,7 +10,7 @@ import {
@@ -31,7 +31,7 @@ index c36edf4..480af0d 100644
  };
  export const APP_PROTOCOL = CHANNEL_APP_PROTOCOLS[BUILD_CHANNEL];
 diff --git a/fluxer_desktop/src/common/DesktopIdentity.ts b/fluxer_desktop/src/common/DesktopIdentity.ts
-index 3572b43..5536600 100644
+index 3572b434..55366005 100644
 --- a/fluxer_desktop/src/common/DesktopIdentity.ts
 +++ b/fluxer_desktop/src/common/DesktopIdentity.ts
 @@ -4,7 +4,7 @@ import {BUILD_CHANNEL, type BuildChannel} from '@electron/common/BuildChannel';
@@ -74,7 +74,7 @@ index 3572b43..5536600 100644
  export const WINDOWS_LEGACY_APP_USER_MODEL_IDS = [`velopack.${WINDOWS_VELOPACK_ID}`];
  export const WINDOWS_TOAST_ACTIVATOR_CLSID = WINDOWS_TOAST_ACTIVATOR_CLSIDS[BUILD_CHANNEL];
 diff --git a/fluxer_desktop/src/common/UserDataPath.ts b/fluxer_desktop/src/common/UserDataPath.ts
-index 95f1b13..ef79640 100644
+index 95f1b139..ef796408 100644
 --- a/fluxer_desktop/src/common/UserDataPath.ts
 +++ b/fluxer_desktop/src/common/UserDataPath.ts
 @@ -16,7 +16,7 @@ type ChannelStorageDirectoryMap = Record<BuildChannel, string>;
@@ -87,7 +87,7 @@ index 95f1b13..ef79640 100644
  };
  
 diff --git a/fluxer_desktop/src/main/Bootstrap.ts b/fluxer_desktop/src/main/Bootstrap.ts
-index d6048a1..89338fe 100644
+index d6048a12..89338fee 100644
 --- a/fluxer_desktop/src/main/Bootstrap.ts
 +++ b/fluxer_desktop/src/main/Bootstrap.ts
 @@ -1,8 +1,8 @@
@@ -155,7 +155,7 @@ index d6048a1..89338fe 100644
  		} else {
  			void refuseUnsupportedBuild('the module system is turned off and this build carries no offline renderer').catch(
 diff --git a/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts b/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
-index b088691..0702c5c 100644
+index b0886910..0702c5c4 100644
 --- a/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
 +++ b/fluxer_desktop/src/main/DesktopRuntimeDiscovery.ts
 @@ -174,7 +174,7 @@ export async function restoreRememberedRuntimePlan(instanceKey: string): Promise
@@ -168,7 +168,7 @@ index b088691..0702c5c 100644
  
  async function fetchRuntimePlan(
 diff --git a/fluxer_desktop/src/main/ModuleBootHandoff.ts b/fluxer_desktop/src/main/ModuleBootHandoff.ts
-index b7de1b1..eed46db 100644
+index b7de1b16..eed46db0 100644
 --- a/fluxer_desktop/src/main/ModuleBootHandoff.ts
 +++ b/fluxer_desktop/src/main/ModuleBootHandoff.ts
 @@ -6,6 +6,12 @@ import {app, type BrowserWindow} from 'electron';
@@ -184,8 +184,23 @@ index b7de1b1..eed46db 100644
  type MainWindowListener = (window: BrowserWindow | null) => void;
  
  type MainWindowReadyListener = () => void;
+diff --git a/fluxer_desktop/src/main/PreReadyChromium.ts b/fluxer_desktop/src/main/PreReadyChromium.ts
+index b5ac5629..546bdf22 100644
+--- a/fluxer_desktop/src/main/PreReadyChromium.ts
++++ b/fluxer_desktop/src/main/PreReadyChromium.ts
+@@ -63,6 +63,10 @@ export function applyPreReadyChromiumConfiguration(channel: BuildChannel, argv:
+ 		appendEnabledChromiumFeatures(enabledChromiumFeatures);
+ 	}
+ 	appendConfiguredChromiumSwitches(getConfiguredChromiumSwitches());
++	if (process.platform === 'win32') {
++		appendEnabledBlinkFeature('RTCEncodedSource');
++		appendEnabledBlinkFeature('RTCEncodedVideoFrameConstructor');
++	}
+ 	if (!isSafeModeLaunch(argv)) {
+ 		appendLinuxChromiumFlagsConfig(channel);
+ 	}
 diff --git a/fluxer_desktop/src/main/index.ts b/fluxer_desktop/src/main/index.ts
-index cb21835..222472a 100644
+index cb218350..f9594683 100644
 --- a/fluxer_desktop/src/main/index.ts
 +++ b/fluxer_desktop/src/main/index.ts
 @@ -19,7 +19,7 @@ import {
@@ -197,7 +212,15 @@ index cb21835..222472a 100644
  import {
  	appendWindowsGpuDriverWorkaroundSwitches,
  	purgeChromiumRuntimeCachesIfNeeded,
-@@ -86,6 +86,7 @@ import {
+@@ -74,6 +74,7 @@ import {
+ 	registerIpcHandlers,
+ } from '@electron/main/IpcHandlers';
+ import {initializeJumpList} from '@electron/main/JumpList';
++import {registerDxDNativeEncoder} from '@electron/main/DxDNativeEncoder';
+ import {describeLaunchDiagnosticOptions, shouldDisableModuleUpdatesForLaunch} from '@electron/main/LaunchOptions';
+ import {cleanupLegacyHarvestHandlers, registerLegacyHarvestHandlers} from '@electron/main/LegacyHarvestIpc';
+ import {initializeLegacyOriginHarvest} from '@electron/main/LegacyOriginHarvest';
+@@ -86,6 +87,7 @@ import {
  	armOpenUrlForwarding,
  	armSecondInstanceForwarding,
  	hasQuitStarted,
@@ -205,7 +228,7 @@ index cb21835..222472a 100644
  	setMainWindowFactory,
  	setOpenUrlSink,
  	setSecondInstanceSink,
-@@ -408,6 +409,23 @@ if (launchConfigurationError) {
+@@ -408,6 +410,23 @@ if (launchConfigurationError) {
  				} catch (error) {
  					log.error('[Init] Failed to install the system trust verifier:', error);
  				}
@@ -229,3 +252,64 @@ index cb21835..222472a 100644
  				try {
  					await runStartupPhaseAsync('desktop-debug-info', async () => {
  						logDesktopDebugInfo(await getDesktopDebugInfo(userDataConfig.base, {nativeProbes: false}));
+@@ -551,6 +570,7 @@ if (launchConfigurationError) {
+ 				}
+ 				try {
+ 					runStartupPhase('native-hardware-encoder-handlers', registerNativeHardwareEncoderHandlers);
++					runStartupPhase('dxd-native-encoder-handlers', registerDxDNativeEncoder);
+ 				} catch (error: unknown) {
+ 					log.error('[Init] Failed to register native hardware encoder handlers:', error);
+ 				}
+diff --git a/fluxer_desktop/src/preload/index.ts b/fluxer_desktop/src/preload/index.ts
+index b0667933..bcba7e20 100644
+--- a/fluxer_desktop/src/preload/index.ts
++++ b/fluxer_desktop/src/preload/index.ts
+@@ -940,3 +940,29 @@ ipcRenderer.on('spellcheck-engine-resolved', (_event, info: SpellcheckResolvedEn
+ });
+ 
+ contextBridge.exposeInMainWorld('electron', api);
++contextBridge.exposeInMainWorld('dxdNativeEncoder', {
++	initialBackend: ipcRenderer.sendSync('dxd-native-encoder:initial-backend'),
++	getSettings: () => ipcRenderer.invoke('dxd-native-encoder:settings'),
++	setBackend: (backend: string) => ipcRenderer.invoke('dxd-native-encoder:select', backend),
++	start: (options: unknown) => ipcRenderer.invoke('dxd-native-encoder:start', options),
++	writeFrame: (id: string, frame: unknown) => ipcRenderer.invoke('dxd-native-encoder:frame', id, frame),
++	stop: (id: string) => ipcRenderer.invoke('dxd-native-encoder:stop', id),
++	reportError: (message: string) => {
++		void ipcRenderer.invoke('dxd-native-encoder:report-error', message).catch(() => {});
++	},
++	onFrame: (callback: (frame: unknown) => void) => {
++		const listener = (_event: Electron.IpcRendererEvent, frame: unknown) => callback(frame);
++		ipcRenderer.on('dxd-native-encoder:frame', listener);
++		return () => ipcRenderer.removeListener('dxd-native-encoder:frame', listener);
++	},
++	onEnd: (callback: (result: unknown) => void) => {
++		const listener = (_event: Electron.IpcRendererEvent, result: unknown) => callback(result);
++		ipcRenderer.on('dxd-native-encoder:end', listener);
++		return () => ipcRenderer.removeListener('dxd-native-encoder:end', listener);
++	},
++	onSettings: (callback: (settings: unknown) => void) => {
++		const listener = (_event: Electron.IpcRendererEvent, settings: unknown) => callback(settings);
++		ipcRenderer.on('dxd-native-encoder:settings-changed', listener);
++		return () => ipcRenderer.removeListener('dxd-native-encoder:settings-changed', listener);
++	},
++});
+
+diff --git a/fluxer_desktop/src/main/DxDNativeEncoder.ts b/fluxer_desktop/src/main/DxDNativeEncoder.ts
+new file mode 100644
+--- /dev/null
++++ b/fluxer_desktop/src/main/DxDNativeEncoder.ts
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: AGPL-3.0-or-later
++import {createRequire} from 'node:module';
++import path from 'node:path';
++import {app} from 'electron';
++
++const requireModule = createRequire(import.meta.url);
++
++export function registerDxDNativeEncoder(): void {
++  const bridge = requireModule(path.join(app.getAppPath(), 'native-encoder-main.cjs')) as {
++    register(): void;
++  };
++  bridge.register();
++}
