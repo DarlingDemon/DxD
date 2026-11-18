@@ -9,6 +9,7 @@ const {patchRendererNativeEncoderUi} = require('./patch-renderer-native-encoder-
 const {patchRendererNativeEncoderPolicy} = require('./patch-renderer-native-encoder-policy.cjs');
 const {patchRendererMusicControls} = require('./patch-renderer-music-controls.cjs');
 const {patchRendererDesktopUpdate} = require('./patch-renderer-desktop-update.cjs');
+const {patchRendererBetterDiscord} = require('./patch-renderer-betterdiscord.cjs');
 
 const upstreamVersion = '2026.1106.11354';
 const {version} = require('./package.json');
@@ -31,6 +32,7 @@ patchRendererNativeEncoderUi(path.join(desktop, 'dist/renderer'));
 patchRendererNativeEncoderPolicy(path.join(desktop, 'dist/renderer'));
 patchRendererMusicControls(path.join(desktop, 'dist/renderer'));
 patchRendererDesktopUpdate(path.join(desktop, 'dist/renderer'));
+patchRendererBetterDiscord(path.join(desktop, 'dist/renderer'), path.dirname(desktop));
 fs.mkdirSync(payload, {recursive: true});
 fs.cpSync(path.join(runtime, 'node_modules'), path.join(payload, 'vendor'), {recursive: true});
 const dependencies = path.join(__dirname, 'node_modules');
